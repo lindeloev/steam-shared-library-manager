@@ -84,6 +84,58 @@ class StatusTests(unittest.TestCase):
             self.assertEqual(mappings["42"], "proton_experimental")
             self.assertTrue(self.status.personal_tool_selected(config))
 
+    def test_registered_library_indexes_follow_top_level_folder_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            (config / "libraryfolders.vdf").write_text(
+                '"libraryfolders"\n'
+                "{\n"
+                '\t"0" { "path" "/home/person/.steam/root" "apps" { "1" "2" } }\n'
+                '\t"4" { "path" "/srv/SteamLibrary" "apps" { "42" "100" } }\n'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                self.status.registered_library_indexes(config),
+                {"/srv/SteamLibrary": 4},
+            )
+
+    def test_library_default_requires_each_initialized_account(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            steam_root = Path(temporary)
+            config = steam_root / "config"
+            config.mkdir()
+            (config / "libraryfolders.vdf").write_text(
+                '"libraryfolders"\n{\n'
+                '\t"0" { "path" "/home/person/.steam/root" }\n'
+                '\t"2" { "path" "/srv/SteamLibrary" }\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            account_config = steam_root / "userdata/123/config"
+            account_config.mkdir(parents=True)
+            localconfig = account_config / "localconfig.vdf"
+            localconfig.write_text(
+                '"UserLocalConfigStore" { "LastInstallFolderIndex" "2" }\n',
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                self.status.library_is_default(
+                    steam_root, config, Path("/srv/SteamLibrary")
+                )
+            )
+            localconfig.write_text(
+                '"UserLocalConfigStore" { "LastInstallFolderIndex" "0" }\n',
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                self.status.library_is_default(
+                    steam_root, config, Path("/srv/SteamLibrary")
+                )
+            )
+
     def test_game_readiness_does_not_require_an_existing_prefix(self) -> None:
         user = {
             "library_registered": True,

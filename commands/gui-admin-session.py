@@ -69,12 +69,19 @@ def arguments_are_allowed(command: str, arguments: list[str]) -> bool:
             and are_normal_users(arguments[2:])
         )
     if command == "add-user.sh":
+        if arguments[:1] != ["--close-steam"]:
+            return False
+        offset = 1
+        if arguments[offset:offset + 1] == ["--default-library"]:
+            if len(arguments) <= offset + 1 or not is_absolute_path(arguments[offset + 1]):
+                return False
+            offset += 2
         return (
-            len(arguments) >= 6
-            and arguments[:3] == ["--close-steam", "--group", GROUP]
-            and arguments[3] == "--base-proton"
-            and is_absolute_path(arguments[4])
-            and are_normal_users(arguments[5:])
+            len(arguments) >= offset + 5
+            and arguments[offset:offset + 2] == ["--group", GROUP]
+            and arguments[offset + 2] == "--base-proton"
+            and is_absolute_path(arguments[offset + 3])
+            and are_normal_users(arguments[offset + 4:])
         )
     if command == "close-steam.sh":
         users = arguments[1:] if arguments[:1] == ["--force"] else arguments

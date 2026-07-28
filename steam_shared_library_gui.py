@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Small graphical guide for a shared Steam library on Ubuntu.
 
-The interface intentionally does not automate Steam's account UI. It can create
-the filesystem library and configure Linux accounts, then shows the two steps
-each Steam account must perform itself: add storage and choose the tool.
+The interface can create the filesystem library, configure Linux accounts, and
+register default Steam storage while the client is closed. It then shows the
+remaining compatibility-tool choice each Steam account must perform itself.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ class SharedSteamGui(tk.Tk):
         self.minsize(900, 720)
         self.geometry("1050x800")
         self.library = tk.StringVar(value=self.default_library())
+        self.make_library_default = tk.BooleanVar(value=True)
         self.status: dict[str, object] = {}
         self.user_names: list[str] = []
         self.selected_names: set[str] = set()
@@ -338,26 +339,36 @@ class SharedSteamGui(tk.Tk):
             instructions = (
                 "Proton is Steam's compatibility tool for Windows-only games on Linux. Install it once in the shared folder.\n\n"
                 "1. Choose one person from Step 1. If they were just added to the shared-game group, log out of Ubuntu and back in first.\n\n"
-                "2. Start Steam and sign in. For a new Steam account, let Steam complete its first-time setup.\n\n"
-                "3. Open Steam → Settings → Storage. Click + / Add Drive and select:\n\n"
-                + self.library.get() +
-                "\n\n4. In Steam's Library, change the filter to Tools, search for “Proton Experimental” (or another official Proton), and install it. When Steam asks for an install location, choose that shared folder—not the default home-folder library.\n\n"
-                "The manager does not continuously check Steam. When you return, click Refresh full status below; Step 4 turns green when Proton is found."
+                "2. Start the native Steam client and sign in. For a new Steam account, let Steam complete its first-time setup.\n\n"
+                "Use the illustrated Steam guide below. Its final card previews the account-specific setting you will apply after Step 5."
             )
             ttk.Label(content, text=instructions, wraplength=590, justify="left").pack(anchor="w", pady=(10 if found else 0, 10))
+            self.build_steam_visual_guide(content)
+            ttk.Label(
+                content,
+                text="The manager does not continuously check Steam. After installing Proton, return here and refresh; Step 4 turns green when Proton is found.",
+                foreground="#555555",
+                wraplength=590,
+            ).pack(anchor="w", pady=(10, 8))
             ttk.Button(content, text="Refresh full status", command=self.refresh_status).pack(anchor="w")
         elif step == 5:
             selected = ", ".join(self.selected_users()) or "No people selected yet"
             ttk.Label(content, text="Selected: " + selected, wraplength=590).pack(anchor="w", pady=(0, 10))
             report = {str(user["name"]): user for user in self.status.get("users", [])}
             if self.selected_users() and self.status_checked:
-                columns = ("person", "group", "steam", "tool")
+                columns = ("person", "group", "steam", "tool", "storage")
                 table = ttk.Treeview(content, columns=columns, show="headings", height=min(len(self.selected_users()), 5))
                 table.tag_configure("ready", background="#dcfce7", foreground="#166534")
-                for column, heading in (("person", "Person"), ("group", "Shared group"), ("steam", "Steam"), ("tool", "Shared-library wrapper")):
+                for column, heading in (
+                    ("person", "Person"),
+                    ("group", "Shared group"),
+                    ("steam", "Steam"),
+                    ("tool", "Wrapper"),
+                    ("storage", "Default storage"),
+                ):
                     table.heading(column, text=heading)
-                    table.column(column, anchor="center", width=130)
-                table.column("person", anchor="w", width=160)
+                    table.column(column, anchor="center", width=115)
+                table.column("person", anchor="w", width=135)
                 for name in self.selected_users():
                     user = report.get(name, {})
                     client = user.get("steam_client")
@@ -371,7 +382,8 @@ class SharedSteamGui(tk.Tk):
                         steam = "Running" if user.get("steam_running") else "Closed" if user.get("steam_initialized") else "Not started"
                     ready = bool(user.get("in_group") and user.get("steam_initialized") and not user.get("steam_running"))
                     table.insert("", "end", values=(name, "Yes" if user.get("in_group") else "No", steam,
-                                                       "Installed" if user.get("tool_installed") else "Not installed"),
+                                                       "Installed" if user.get("tool_installed") else "Not installed",
+                                                       "Shared folder" if user.get("library_default") else "Other"),
                                  tags=("ready",) if ready else ())
                 table.pack(anchor="w", fill="x", pady=(0, 10))
             elif self.selected_users():
@@ -382,6 +394,20 @@ class SharedSteamGui(tk.Tk):
                 ttk.Label(content, text="Before this step, each of these people must log in to the native Steam client once and let its first-time setup finish: "
                           + ", ".join(not_started) + ". They can then close Steam and return here to refresh status.",
                           foreground="#991b1b", wraplength=590).pack(anchor="w", pady=(0, 10))
+            ttk.Checkbutton(
+                content,
+                text="Register the shared folder and make it the default Steam storage for these people",
+                variable=self.make_library_default,
+                command=self.update_journey,
+            ).pack(anchor="w", pady=(0, 4))
+            ttk.Label(
+                content,
+                text="Recommended. This is enabled by default so future game and tool installs use "
+                     + self.library.get()
+                     + ". Steam configuration files are backed up before they are changed.",
+                foreground="#555555",
+                wraplength=590,
+            ).pack(anchor="w", pady=(0, 10))
             if ready:
                 label = "Set up selected people" if len(ready) == len(self.selected_users()) else "Set up ready people (" + ", ".join(ready) + ")"
                 ttk.Button(content, text=label, command=lambda people=ready: self.add_users(people)).pack(anchor="w")
@@ -399,11 +425,16 @@ class SharedSteamGui(tk.Tk):
             elif not self.selected_users():
                 ttk.Label(content, text="Choose people in Step 1 to check setup completion.", foreground="#555555").pack(anchor="w")
             else:
-                columns = ("person", "storage", "wrapper", "status")
+                columns = ("person", "storage", "default", "wrapper", "status")
                 table = ttk.Treeview(content, columns=columns, show="headings", height=min(len(self.selected_users()), 5))
                 table.tag_configure("complete", background="#dcfce7", foreground="#166534")
-                for column, heading, width in (("person", "Person", 150), ("storage", "Shared folder", 125),
-                                               ("wrapper", "Wrapper selected", 145), ("status", "Next action", 210)):
+                for column, heading, width in (
+                    ("person", "Person", 120),
+                    ("storage", "Shared folder", 105),
+                    ("default", "Default storage", 110),
+                    ("wrapper", "Wrapper", 105),
+                    ("status", "Next action", 190),
+                ):
                     table.heading(column, text=heading)
                     table.column(column, anchor="center", width=width)
                 table.column("person", anchor="w")
@@ -411,6 +442,7 @@ class SharedSteamGui(tk.Tk):
                 for name in self.selected_users():
                     user = report.get(name, {})
                     storage = "Added" if user.get("library_registered") else "Not added"
+                    default = "Shared folder" if user.get("library_default") else "Other"
                     wrapper = "Selected" if user.get("personal_tool_selected") else "Not selected"
                     if not user.get("steam_initialized"):
                         next_action = "Start native Steam once"
@@ -418,13 +450,15 @@ class SharedSteamGui(tk.Tk):
                         next_action = "Complete Step 5"
                     elif not user.get("library_registered"):
                         next_action = "Add shared folder"
+                    elif self.make_library_default.get() and not user.get("library_default"):
+                        next_action = "Make shared folder default"
                     elif not user.get("personal_tool_selected"):
                         next_action = "Select wrapper in Steam"
                     else:
                         next_action = "Complete"
                     done = next_action == "Complete"
                     complete = complete and done
-                    table.insert("", "end", values=(name, storage, wrapper, next_action), tags=("complete",) if done else ())
+                    table.insert("", "end", values=(name, storage, default, wrapper, next_action), tags=("complete",) if done else ())
                 table.pack(anchor="w", fill="x", pady=(0, 10))
                 if complete:
                     ttk.Label(content, text="Setup complete. Each person can now use the shared library; a private Proton prefix is created only when they first launch a Windows game.",
@@ -439,6 +473,79 @@ class SharedSteamGui(tk.Tk):
             ttk.Label(content, text="Advanced maintenance", font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
             ttk.Label(content, text="For an existing library only: replace explicit official-Proton choices with this tool. Steam must be closed; a backup is made first.", wraplength=590).pack(anchor="w", pady=(4, 8))
             ttk.Button(content, text="Migrate explicit official-Proton choices", command=self.migrate_users).pack(anchor="w")
+
+    def build_steam_visual_guide(self, parent: tk.Misc) -> None:
+        """Build the illustrated Steam hand-off as a small previous/next flow."""
+        slides = (
+            (
+                "1. Add the shared storage folder",
+                "Open Steam → Settings → Storage, choose Add Drive, and select:\n"
+                + self.library.get()
+                + "\n\nIf Steam does not ask where to install Proton, open this folder's ••• menu and make it the default temporarily.",
+                HERE / "media/gui/steam_storage.png",
+            ),
+            (
+                "2. Find an official Proton",
+                "Open Library, open its filter, and enable Tools. Select Proton Experimental (or another official Proton) to open its library page.",
+                HERE / "media/gui/steam_tools.png",
+            ),
+            (
+                "3. Install Proton in the shared folder",
+                "Choose Install, select "
+                + self.library.get()
+                + " under Install To, then choose Install in the confirmation window. Do not select the home-folder library.",
+                HERE / "media/gui/steam_proton_install.png",
+            ),
+            (
+                "4. Later, select the personal-settings tool",
+                "Do this after Step 5 for each person's Steam account. Open Steam → Settings → Compatibility, enable Steam Play if requested, and choose “Shared library – personal settings (Proton)” as the default compatibility tool.",
+                HERE / "media/gui/steam_compatibility.png",
+            ),
+        )
+        guide = ttk.LabelFrame(parent, text="Illustrated Steam guide", padding=10)
+        guide.pack(anchor="w", fill="x", pady=(2, 0))
+        title = ttk.Label(guide, font=("TkDefaultFont", 11, "bold"))
+        title.pack(anchor="w")
+        description = ttk.Label(guide, justify="left", wraplength=570)
+        description.pack(anchor="w", fill="x", pady=(4, 8))
+        image_label = ttk.Label(guide, anchor="center")
+        image_label.pack(fill="x")
+        controls = ttk.Frame(guide)
+        controls.pack(fill="x", pady=(9, 0))
+        position = ttk.Label(controls, anchor="center")
+        position.pack(side="left", fill="x", expand=True)
+        previous_button = ttk.Button(controls, text="← Previous")
+        previous_button.pack(side="left")
+        next_button = ttk.Button(controls, text="Next →")
+        next_button.pack(side="left", padx=(8, 0))
+
+        photos: list[tk.PhotoImage | None] = []
+        for _slide_title, _slide_text, image_path in slides:
+            try:
+                photos.append(tk.PhotoImage(file=str(image_path)))
+            except tk.TclError:
+                photos.append(None)
+        current = 0
+
+        def show_slide(index: int) -> None:
+            nonlocal current
+            current = index
+            slide_title, slide_text, _image_path = slides[index]
+            title.configure(text=slide_title)
+            description.configure(text=slide_text)
+            photo = photos[index]
+            if photo is None:
+                image_label.configure(image="", text="Screenshot unavailable")
+            else:
+                image_label.configure(image=photo, text="")
+            image_label.image = photo  # type: ignore[attr-defined]
+            position.configure(text=f"{index + 1} of {len(slides)}")
+            previous_button.configure(state="disabled" if index == 0 else "normal")
+            next_button.configure(state="disabled" if index == len(slides) - 1 else "normal")
+
+        previous_button.configure(command=lambda: show_slide(current - 1))
+        next_button.configure(command=lambda: show_slide(current + 1))
+        show_slide(0)
 
     def manage_library(self) -> None:
         """Open the system directory picker for the shared game folder."""
@@ -822,10 +929,19 @@ class SharedSteamGui(tk.Tk):
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="✓  Finish setup in each person's Steam account", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
         ttk.Label(frame, text="Do these remaining Steam-account steps separately for each selected person. The earlier group access and wrapper installation are already complete.", wraplength=650).pack(anchor="w", pady=(4, 12))
+        storage_instruction = (
+            "2. Step 5 normally registers the shared folder and makes it the default automatically. "
+            "If this person's status still says Not added or Other, open Steam → Settings → Storage, "
+            "use + / Add Drive to choose the folder from Step 2, then use its ••• menu → Make Default.\n\n"
+            if self.make_library_default.get()
+            else
+            "2. Open Steam → Settings → Storage. Use + / Add Drive to choose the shared game folder "
+            "shown in Step 2, then use its ••• menu → Make Default if desired.\n\n"
+        )
         instructions = (
             "1. Start the native Steam client and sign in as that person.\n\n"
-            "2. Open Steam → Settings → Storage. Use + / Add Drive, then choose the shared game folder shown in Step 2. This registers that folder for this Steam account; it does not move any games.\n\n"
-            "3. Open Steam → Settings → Compatibility. Enable Steam Play if Steam asks, then choose “Shared library – personal settings (Proton)” as the default compatibility tool.\n\n"
+            + storage_instruction
+            + "3. Open Steam → Settings → Compatibility. Enable Steam Play if Steam asks, then choose “Shared library – personal settings (Proton)” as the default compatibility tool.\n\n"
             "4. Restart Steam. Windows games will create that person's private game settings automatically the first time they are launched. Native Linux games need no private setup."
         )
         tk.Label(frame, text=instructions, justify="left", anchor="nw", wraplength=650).pack(fill="x")
@@ -838,7 +954,11 @@ class SharedSteamGui(tk.Tk):
         else:
             progress = []
             for user in selected:
-                completed = user["library_registered"] and user["personal_tool_selected"]
+                completed = (
+                    user["library_registered"]
+                    and user["personal_tool_selected"]
+                    and (not self.make_library_default.get() or user.get("library_default"))
+                )
                 progress.append(str(user["name"]) + (": completed" if completed else ": still needs Steam steps"))
             status = "Current progress: " + "; ".join(progress)
         ttk.Label(frame, text=status, foreground="#555555", wraplength=650).pack(anchor="w", pady=(12, 0))
@@ -896,14 +1016,24 @@ class SharedSteamGui(tk.Tk):
             self.set_card(5, "#e5e7eb")
         elif users and any(not user["steam_initialized"] for user in users):
             self.set_card(5, "#fee2e2")
-        elif users and all(user["in_group"] and user["tool_installed"] for user in users):
+        elif users and all(
+            user["in_group"]
+            and user["tool_installed"]
+            and (not self.make_library_default.get() or user.get("library_default"))
+            for user in users
+        ):
             self.set_card(5, "#dcfce7")
         else:
             self.set_card(5, "#e5e7eb")
 
         if not selected:
             self.set_card(6, "#e5e7eb")
-        elif users and all(user["library_registered"] and user["personal_tool_selected"] for user in users):
+        elif users and all(
+            user["library_registered"]
+            and user["personal_tool_selected"]
+            and (not self.make_library_default.get() or user.get("library_default"))
+            for user in users
+        ):
             self.set_card(6, "#dcfce7")
         else:
             self.set_card(6, "#e5e7eb")
@@ -929,10 +1059,16 @@ class SharedSteamGui(tk.Tk):
             messagebox.showwarning("Complete Step 4 first", "Steam has not found an official Proton tool in this shared folder yet. Open Step 4 for the exact folder and installation steps.", parent=parent or self)
             return
         text = "Set up shared-library access and personal Windows-game settings for: " + ", ".join(users) + "?\n\nThe tool checks whether Steam is running and asks it to close before making changes."
+        if self.make_library_default.get():
+            text += "\n\nThe shared folder will also be registered and made their default Steam storage. Changed Steam configuration files are backed up first."
         if messagebox.askyesno("Configure users", text, parent=parent or self):
+            arguments = ["--close-steam"]
+            if self.make_library_default.get():
+                arguments.extend(["--default-library", self.library.get()])
+            arguments.extend(["--group", GROUP, "--base-proton", proton, *users])
             self.run_admin(
                 "add-user.sh",
-                ["--close-steam", "--group", GROUP, "--base-proton", proton, *users],
+                arguments,
                 "People configured. Each person must log out/in and complete the Steam hand-off steps.",
                 5,
                 parent,

@@ -54,6 +54,30 @@ class RequestValidationTests(unittest.TestCase):
         }
         self.assertIsNone(self.module.valid_request(request))
 
+    def test_accepts_optional_default_library_for_add_user(self) -> None:
+        normal_user = next(
+            account.pw_name
+            for account in pwd.getpwall()
+            if account.pw_uid >= 1000 and not account.pw_shell.endswith(("nologin", "false"))
+        )
+        request = {
+            "command": "add-user.sh",
+            "arguments": [
+                "--close-steam",
+                "--default-library",
+                "/srv/SteamLibrary",
+                "--group",
+                "steamgames",
+                "--base-proton",
+                "/srv/SteamLibrary/steamapps/common/Proton - Experimental",
+                normal_user,
+            ],
+        }
+        self.assertEqual(
+            self.module.valid_request(request),
+            ("add-user.sh", request["arguments"]),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

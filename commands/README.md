@@ -11,7 +11,11 @@ status, and sends an allow-listed command plus an argument array to
 - `repair-shared-library.sh` repairs group ownership, permissions, and ACLs in a
   recognized Steam library.
 - `grant-library-users.sh` adds existing Linux accounts to the access group.
-- `add-user.sh` combines a clean Steam shutdown, group access, and tool install.
+- `add-user.sh` combines a clean Steam shutdown, group access, tool install,
+  and optional default-storage configuration.
+- `configure-steam-storage.py` registers the shared folder and selects its
+  folder index as the default for each initialized Steam account. It is invoked
+  by `add-user.sh` when `--default-library` is used.
 - `close-steam.sh` asks selected users' native Steam clients to exit; `--force`
   is an explicit SIGTERM fallback when desktop IPC is unavailable or ignored.
 - `install.sh` installs or updates the compatibility wrapper for selected users.
@@ -32,7 +36,7 @@ status, and sends an allow-listed command plus an argument array to
 
 Each administrative script validates all important inputs before changing
 state, refuses unsafe Steam-root symlinks, and stops if Steam could rewrite the
-same account files. Config migrations use unique backups and atomic replacement;
-if a multi-account run stops partway through, its output identifies the account
-in progress and the command can be rerun. Read the individual script headers or
-run a command with `--help` for its exact interface.
+same account files. Steam configuration changes use unique backups and atomic
+replacement; if a multi-account run stops partway through, its output identifies
+the account in progress and the command can be rerun. Read the individual script
+headers or run a command with `--help` for its exact interface.

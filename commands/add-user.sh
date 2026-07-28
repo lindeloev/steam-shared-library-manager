@@ -2,13 +2,23 @@
 # Add existing Linux accounts to an already-created shared Steam library.
 set -eu
 usage() { cat <<'EOF'
-Usage: add-user.sh [--close-steam] --group GROUP --base-proton PATH USER [USER ...]
+Usage: add-user.sh [--close-steam] [--default-library PATH] --group GROUP --base-proton PATH USER [USER ...]
 EOF
 }
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
 if [ "$(id -u)" -ne 0 ]; then echo "Run this script with sudo or pkexec." >&2; exit 1; fi
 close_steam=false
 if [ "${1:-}" = "--close-steam" ]; then close_steam=true; shift; fi
+default_library=
+if [ "${1:-}" = "--default-library" ]; then
+    [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+    default_library=$2
+    [ -d "$default_library/steamapps" ] || {
+        echo "Not a Steam library: $default_library" >&2
+        exit 1
+    }
+    shift 2
+fi
 if [ "${1:-}" != "--group" ] || [ "${3:-}" != "--base-proton" ] || [ "$#" -lt 5 ]; then usage >&2; exit 2; fi
 group_name=$2
 base_proton=$4
@@ -55,4 +65,7 @@ for user_name in "$@"; do
     usermod -a -G "$group_name" "$user_name"
 done
 "$script_dir/install.sh" --base-proton "$base_proton" "$@"
+if [ -n "$default_library" ]; then
+    "$script_dir/configure-steam-storage.py" --library "$default_library" "$@"
+fi
 echo "Each listed user must log out of Ubuntu and back in before using the shared library."

@@ -1,9 +1,10 @@
 # Steam Shared Library Manager
 
 Share one Steam game installation between several Linux accounts without
-sharing Windows-game settings, Proton state, or non-cloud saves.
+sharing settings, Proton state, or non-cloud saves. This makes steam behave
+similar to Windows for multiple users on the same computer.
 
-Steam normally puts a Windows game's Proton prefix beside the shared game in
+Steam normally puts non-linux game's Proton prefix beside the shared game in
 `steamapps/compatdata/<appid>`. This project installs a small compatibility
 wrapper that instead uses:
 
@@ -14,6 +15,8 @@ $XDG_DATA_HOME/steam-shared-library-proton/<appid>
 Each Linux account therefore gets a private prefix while game assets and the
 official Proton installation remain shared. Native Linux games are unaffected.
 Steam displays the wrapper as **Shared library – personal settings (Proton)**.
+
+![Steam Shared Library Manager showing the six-step setup journey](media/sslm.jpg)
 
 ## Supported setup
 
@@ -60,12 +63,18 @@ The manager guides you through six steps:
    library.
 3. Log out and back in so new group membership reaches the desktop session.
 4. Add the folder to one Steam account and install an official Proton there.
-5. Close Steam and install the personal-settings wrapper for each person.
-6. Finish the two account-specific Steam settings and check game status.
+5. Close Steam, install the personal-settings wrapper, and optionally register
+   the shared folder as each person's default Steam storage.
+6. Finish the remaining account-specific Steam setting and check game status.
 
-For a new library, `/srv/SteamLibrary` is a sensible default. The manager does
-not automate Steam's account UI: each person still adds the folder under
-**Settings → Storage** and selects the wrapper under
+Step 4 includes an illustrated, previous/next Steam guide showing where to add
+the shared storage folder, find an official Proton under **Library → Tools**,
+and—after Step 5—select the personal-settings tool under
+**Settings → Compatibility**.
+
+For a new library, `/srv/SteamLibrary` is a sensible default. Step 5 registers
+it and makes it the default storage for each selected person unless that
+default-on option is unchecked. Each person still selects the wrapper under
 **Settings → Compatibility**.
 
 Selections survive the required logout/login in:
@@ -112,8 +121,9 @@ The same operations are available without the GUI. For example:
 sudo ./commands/setup-shared-library.sh \
   --library /srv/SteamLibrary --group steamgames user1 user2
 
-# Install the wrapper after an official Proton is in the shared library.
-sudo ./commands/install.sh \
+# Add people, install the wrapper, and make the shared folder their default.
+sudo ./commands/add-user.sh --close-steam \
+  --default-library /srv/SteamLibrary --group steamgames \
   --base-proton '/srv/SteamLibrary/steamapps/common/Proton - Experimental' \
   user1 user2
 

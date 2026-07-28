@@ -158,6 +158,47 @@ def library_registered(config: Path, library: Path) -> bool:
     return str(library) in registered_libraries(config)
 
 
+def registered_library_indexes(config: Path) -> dict[str, int]:
+    """Return external library paths and their Steam folder indexes."""
+    section = vdf_object(read_text(config / "libraryfolders.vdf"), "libraryfolders")
+    indexes: dict[str, int] = {}
+    position = 0
+    entry_pattern = re.compile(r'"([0-9]+)"\s*\{')
+    while match := entry_pattern.search(section, position):
+        opening_brace = section.find("{", match.start())
+        result = vdf_braced_value(section, opening_brace)
+        if result is None:
+            break
+        body, closing_brace = result
+        path = vdf_value(body, "path").replace("\\\\", "/")
+        if path and "/.steam/" not in path:
+            indexes[path] = int(match.group(1))
+        position = closing_brace + 1
+    return indexes
+
+
+def library_is_default(steam_root: Path, config: Path, library: Path) -> bool:
+    """Check the per-Steam-account default install-folder selection."""
+    index = registered_library_indexes(config).get(str(library))
+    if index is None:
+        return False
+    safe_configs = steam_localconfigs(steam_root)
+    return bool(safe_configs) and all(
+        vdf_value(read_text(path), "LastInstallFolderIndex") == str(index)
+        for path in safe_configs
+    )
+
+
+def steam_localconfigs(steam_root: Path) -> list[Path]:
+    """Return initialized account configs without following escapes."""
+    localconfigs = sorted((steam_root / "userdata").glob("[0-9]*/config/localconfig.vdf"))
+    return [
+        resolved
+        for path in localconfigs
+        if (resolved := safe_existing_descendant(steam_root, path)) is not None
+    ]
+
+
 def personal_tool_selected(config: Path) -> bool:
     """Report the account-wide tool choice without changing Steam state."""
     return compat_tool_mappings(config).get("0") == TOOL_ID
@@ -277,8 +318,15 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         "steam_client": steam_client,
         "steam_clients": steam_clients,
         "in_group": group_name in user_groups(user),
-        "steam_initialized": "native" in steam_clients,
+        "steam_initialized": (
+            bool(steam_localconfigs(steam_root))
+            if steam_root is not None and "native" in steam_clients else False
+        ),
         "library_registered": library_registered(config, library) if config is not None else False,
+        "library_default": (
+            library_is_default(steam_root, config, library)
+            if steam_root is not None and config is not None else False
+        ),
         "tool_installed": (
             (tool_dir / "proton").is_file() and (tool_dir / "base-proton.conf").is_file()
             if tool_dir is not None else False
