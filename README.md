@@ -38,13 +38,16 @@ sudo apt install acl pkexec python3-tk steam-installer
 
 ## Quick start
 
-Download or clone this repository, then run:
+Clone this repository from GitHub, then run:
 
 ```bash
+git clone https://github.com/lindeloev/steam-shared-library-manager.git
+cd steam-shared-library-manager
 ./launch-gui.sh
 ```
 
-If executable permissions were lost when downloading a ZIP, use:
+Alternatively, [download the source as a ZIP][source-zip] and extract it. If
+executable permissions were lost in the download, use:
 
 ```bash
 sh ./launch-gui.sh
@@ -148,7 +151,7 @@ game limitations. It only separates per-user Proton data from shared assets.
 The current implementation has been usage-tested on two multi-user Ubuntu
 26.04 systems. Development was AI-assisted; review and testing are ongoing.
 Contributions and reports from other native Debian/Ubuntu configurations are
-welcome.
+welcome through the [GitHub issue tracker][issues].
 
 Run the standard-library regression tests with:
 
@@ -160,3 +163,6 @@ GitHub Actions runs these tests plus Python compilation, POSIX shell syntax
 checks, and ShellCheck on each push and pull request.
 
 Licensed under the [MIT License](LICENSE).
+
+[issues]: https://github.com/lindeloev/steam-shared-library-manager/issues
+[source-zip]: https://github.com/lindeloev/steam-shared-library-manager/archive/refs/heads/main.zip
