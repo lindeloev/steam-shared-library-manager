@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 
 
 SAFE_GAME_STATES = {"native", "personal_ready", "personal_created"}
@@ -26,6 +28,29 @@ class GameTableRow:
 def format_admin_request(script: str, arguments: list[str]) -> str:
     """Format an argv array transparently without implying shell evaluation."""
     return shlex.join([f"commands/{script}", *arguments])
+
+
+def default_shared_library(home: Path) -> str:
+    """Prefer an external Steam library, never Steam's private primary tree."""
+    steam_root_link = home / ".steam/root"
+    config = steam_root_link / "config/libraryfolders.vdf"
+    try:
+        steam_root = steam_root_link.resolve(strict=True)
+        text = config.read_text(errors="replace")
+    except OSError:
+        return "/srv/SteamLibrary"
+
+    for path in re.findall(r'"path"\s*"([^"]+)"', text):
+        candidate = Path(path.replace("\\\\", "/"))
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved == steam_root:
+            continue
+        if (resolved / "steamapps").is_dir():
+            return str(resolved)
+    return "/srv/SteamLibrary"
 
 
 def build_game_rows(games: list[dict[str, object]], selected: list[str]) -> list[GameTableRow]:

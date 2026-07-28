@@ -12,14 +12,14 @@ EOF
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
 if [ "$(id -u)" -ne 0 ]; then echo "Run this setup script with sudo." >&2; exit 1; fi
 if [ "${1:-}" != "--library" ] || [ "${3:-}" != "--group" ] || [ "$#" -lt 4 ]; then usage >&2; exit 2; fi
-library=$2
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+. "$script_dir/_common.sh"
+library=$(require_safe_library_path "$2") || exit 1
+require_not_personal_steam_root "$library" || exit 1
 group_name=$4
 shift 4
 
 # Only a dedicated, missing/empty path is safe to prepare automatically.
-case "$library" in /*) ;; *) echo "Library path must be absolute: $library" >&2; exit 2;; esac
-case "$library" in /|/usr|/usr/*) echo "Choose a dedicated data location such as /srv/SteamLibrary or a mounted disk." >&2; exit 2;; esac
-if [ -L "$library" ]; then echo "Refusing symbolic-link library path: $library" >&2; exit 1; fi
 if [ -e "$library" ] && [ ! -d "$library" ]; then echo "Library path exists but is not a directory: $library" >&2; exit 1; fi
 if [ -d "$library" ] && [ -n "$(find -P "$library" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
     echo "Refusing to alter non-empty path: $library" >&2

@@ -91,13 +91,28 @@ class StorageConfigTests(unittest.TestCase):
             path.write_text("old\n", encoding="utf-8")
             user = pwd.getpwuid(os.getuid())
 
-            backup = self.storage.atomic_update(path, "new\n", user)
+            backup = self.storage.atomic_update(path, "old\n", "new\n", user)
 
             self.assertIsNotNone(backup)
             assert backup is not None
             self.assertEqual(backup.read_text(encoding="utf-8"), "old\n")
             self.assertEqual(path.read_text(encoding="utf-8"), "new\n")
-            self.assertIsNone(self.storage.atomic_update(path, "new\n", user))
+            self.assertIsNone(self.storage.atomic_update(path, "new\n", "new\n", user))
+
+    def test_atomic_update_refuses_a_post_preflight_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "localconfig.vdf"
+            path.write_text("changed elsewhere\n", encoding="utf-8")
+            user = pwd.getpwuid(os.getuid())
+
+            with self.assertRaisesRegex(ValueError, "changed after preflight"):
+                self.storage.atomic_update(path, "old\n", "manager update\n", user)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "changed elsewhere\n")
+            self.assertEqual(
+                list(path.parent.glob("*.steam-shared-library-manager-backup.*")),
+                [],
+            )
 
 
 if __name__ == "__main__":

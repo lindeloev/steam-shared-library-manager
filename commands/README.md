@@ -4,6 +4,11 @@ Every program that inspects or changes shared-library, Steam-account, or Proton
 prefix state lives in this directory. The GUI only gathers choices, shows
 status, and sends an allow-listed command plus an argument array to
 `gui-admin-session.py`.
+At authorization time the helper freezes these files in a root-private
+temporary snapshot; subsequent edits to the checkout cannot alter that
+authorized session. The privileged Python interpreter uses isolated,
+no-bytecode mode so it neither imports checkout-local modules nor leaves
+root-owned cache files behind.
 
 ## Administrative commands
 
@@ -35,8 +40,10 @@ status, and sends an allow-listed command plus an argument array to
   is sourced by other commands and is not a standalone command.
 
 Each administrative script validates all important inputs before changing
-state, refuses unsafe Steam-root symlinks, and stops if Steam could rewrite the
-same account files. Steam configuration changes use unique backups and atomic
-replacement; if a multi-account run stops partway through, its output identifies
-the account in progress and the command can be rerun. Read the individual script
-headers or run a command with `--help` for its exact interface.
+state, refuses unsafe symlinked library paths and personal primary Steam
+folders, and stops if Steam could rewrite the same account files. Steam
+configuration changes use unique backups and atomic replacement. The automatic
+storage writer also aborts rather than overwrite a file changed after
+preflight. If a multi-account run stops partway through, its output identifies
+the account in progress and the command can be rerun. Read the individual
+script headers or run a command with `--help` for its exact interface.

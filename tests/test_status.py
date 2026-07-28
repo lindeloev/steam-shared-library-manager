@@ -101,6 +101,22 @@ class StatusTests(unittest.TestCase):
                 {"/srv/SteamLibrary": 4},
             )
 
+    def test_primary_library_index_is_never_reported_as_shared(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            (config / "libraryfolders.vdf").write_text(
+                '"libraryfolders" {'
+                ' "0" { "path" "/home/person/.local/share/Steam" }'
+                ' "1" { "path" "/srv/SteamLibrary" }'
+                " }\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                self.status.registered_libraries(config),
+                {"/srv/SteamLibrary"},
+            )
+
     def test_library_default_requires_each_initialized_account(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             steam_root = Path(temporary)

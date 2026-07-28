@@ -12,7 +12,6 @@ import grp
 import json
 import os
 import pwd
-import re
 import subprocess
 import sys
 import threading
@@ -21,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from manager_model import build_game_rows, format_admin_request
+from manager_model import build_game_rows, default_shared_library, format_admin_request
 
 
 HERE = Path(__file__).resolve().parent
@@ -57,18 +56,7 @@ class SharedSteamGui(tk.Tk):
 
     @staticmethod
     def default_library() -> str:
-        # Prefer a library Steam already knows for the person launching the
-        # guide. No project-specific setting is needed or written to disk.
-        config = Path.home() / ".steam/root/config/libraryfolders.vdf"
-        try:
-            paths = re.findall(r'"path"\s*"([^"]+)"', config.read_text(errors="replace"))
-        except OSError:
-            paths = []
-        for path in paths:
-            candidate = Path(path.replace("\\\\", "/"))
-            if "/.steam/" not in str(candidate) and (candidate / "steamapps").is_dir():
-                return str(candidate)
-        return "/srv/SteamLibrary"
+        return default_shared_library(Path.home())
 
     @staticmethod
     def state_path() -> Path:
@@ -380,11 +368,18 @@ class SharedSteamGui(tk.Tk):
                         steam = "Native + sandboxed"
                     else:
                         steam = "Running" if user.get("steam_running") else "Closed" if user.get("steam_initialized") else "Not started"
-                    ready = bool(user.get("in_group") and user.get("steam_initialized") and not user.get("steam_running"))
+                    complete = bool(
+                        user.get("in_group")
+                        and user.get("tool_installed")
+                        and (
+                            not self.make_library_default.get()
+                            or user.get("library_default")
+                        )
+                    )
                     table.insert("", "end", values=(name, "Yes" if user.get("in_group") else "No", steam,
                                                        "Installed" if user.get("tool_installed") else "Not installed",
                                                        "Shared folder" if user.get("library_default") else "Other"),
-                                 tags=("ready",) if ready else ())
+                                 tags=("ready",) if complete else ())
                 table.pack(anchor="w", fill="x", pady=(0, 10))
             elif self.selected_users():
                 ttk.Label(content, text="Their current setup has not been checked yet. Use Refresh full status to inspect it.", wraplength=590).pack(anchor="w", pady=(0, 10))
@@ -556,11 +551,38 @@ class SharedSteamGui(tk.Tk):
     def use_library_path(self, path: str) -> None:
         """Inspect a chosen path; only safe path types are eligible for changes."""
         selected = path.strip()
+        if any(ord(character) < 32 or ord(character) == 127 for character in selected):
+            messagebox.showerror("Invalid folder", "The shared-game-folder path cannot contain control characters.", parent=self)
+            return
         if not selected.startswith("/"):
             messagebox.showerror("Invalid folder", "The shared-game-folder path must be absolute.", parent=self)
             return
         if selected == "/" or selected == "/usr" or selected.startswith("/usr/"):
             messagebox.showerror("Unsafe folder", "Choose a dedicated data folder, not / or /usr.", parent=self)
+            return
+        candidate = Path(selected)
+        lexical = Path(os.path.abspath(selected))
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            resolved = lexical
+        if resolved != lexical:
+            messagebox.showerror(
+                "Unsafe folder",
+                "Choose the real library folder directly. Symbolic links in the shared-folder path are not accepted.",
+                parent=self,
+            )
+            return
+        try:
+            personal_steam_root = (Path.home() / ".steam/root").resolve(strict=True)
+        except OSError:
+            personal_steam_root = None
+        if personal_steam_root is not None and resolved == personal_steam_root:
+            messagebox.showerror(
+                "Personal Steam folder",
+                "Steam's primary folder contains this account's private client data. Choose a separate folder such as /srv/SteamLibrary.",
+                parent=self,
+            )
             return
         if selected != self.library.get():
             # Do not show a previous folder's scan as if it described this one.
@@ -569,7 +591,6 @@ class SharedSteamGui(tk.Tk):
         self.library.set(selected)
         self.save_state()
         self.update_journey()
-        candidate = Path(selected)
         if candidate.exists() and not candidate.is_dir():
             messagebox.showerror("Invalid folder", "The selected path exists but is not a directory.", parent=self)
             return
@@ -678,7 +699,7 @@ class SharedSteamGui(tk.Tk):
                     if self.admin_process is None or self.admin_process.poll() is not None:
                         helper = HERE / "commands" / "gui-admin-session.py"
                         self.admin_process = subprocess.Popen(
-                            [PKEXEC, SYSTEM_PYTHON, str(helper)], text=True,
+                            [PKEXEC, SYSTEM_PYTHON, "-I", "-B", str(helper)], text=True,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT,
                         )
@@ -992,17 +1013,22 @@ class SharedSteamGui(tk.Tk):
             return
         library_exists = bool(self.status.get("library_exists"))
         sharing_ready = bool(self.status.get("shared_access_ready"))
+        users = self.selected_statuses()
         self.set_card(1, "#dcfce7" if selected else "#e5e7eb")
         if 2 in self.failed_steps:
             self.set_card(2, "#fee2e2")
-        elif library_exists and sharing_ready:
+        elif (
+            library_exists
+            and sharing_ready
+            and users
+            and all(user.get("in_group") for user in users)
+        ):
             self.set_card(2, "#dcfce7")
         elif self.status.get("library_kind") == "steam_library":
             self.set_card(2, "#fee2e2")
         else:
             self.set_card(2, "#e5e7eb")
 
-        users = self.selected_statuses()
         self.set_card(3, "#dcfce7" if session_ready else "#e5e7eb")
 
         if self.status.get("base_proton_ready"):
@@ -1030,6 +1056,7 @@ class SharedSteamGui(tk.Tk):
             self.set_card(6, "#e5e7eb")
         elif users and all(
             user["library_registered"]
+            and user["tool_installed"]
             and user["personal_tool_selected"]
             and (not self.make_library_default.get() or user.get("library_default"))
             for user in users
@@ -1081,8 +1108,16 @@ class SharedSteamGui(tk.Tk):
         if not candidates:
             common = Path(self.library.get()) / "steamapps/common"
             try:
-                candidates = [item for item in common.iterdir() if item.is_dir() and item.name.startswith("Proton")
-                              and (item / "proton").is_file() and (item / "proton").stat().st_mode & 0o111]
+                candidates = [
+                    item
+                    for item in common.iterdir()
+                    if not item.is_symlink()
+                    and item.is_dir()
+                    and item.name.startswith("Proton")
+                    and not (item / "proton").is_symlink()
+                    and (item / "proton").is_file()
+                    and (item / "proton").stat().st_mode & 0o111
+                ]
             except OSError:
                 candidates = []
         candidates.sort(key=lambda item: (item.name != "Proton - Experimental", item.name))

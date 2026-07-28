@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import pwd
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -41,6 +43,19 @@ class RequestValidationTests(unittest.TestCase):
         self.assertIsNone(
             self.module.valid_request({"command": "status.py", "arguments": ["bad\0argument"]})
         )
+        self.assertIsNone(
+            self.module.valid_request(
+                {
+                    "command": "status.py",
+                    "arguments": [
+                        "--library",
+                        "/srv/Steam\nLibrary",
+                        "--group",
+                        "steamgames",
+                    ],
+                }
+            )
+        )
 
     def test_rejects_group_other_than_steamgames(self) -> None:
         normal_user = next(
@@ -77,6 +92,27 @@ class RequestValidationTests(unittest.TestCase):
             self.module.valid_request(request),
             ("add-user.sh", request["arguments"]),
         )
+
+    def test_project_snapshot_is_private_and_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            commands = self.module.snapshot_project(Path(temporary))
+
+            self.assertEqual(os.stat(commands).st_mode & 0o777, 0o700)
+            self.assertEqual(
+                {path.name for path in commands.iterdir()},
+                set(self.module.COMMAND_FILES),
+            )
+            self.assertTrue((commands / "setup-shared-library.sh").is_file())
+            self.assertTrue((commands.parent / "toolmanifest.vdf").is_file())
+
+    def test_timeout_terminates_the_invocation_process_group(self) -> None:
+        code, output = self.module.run_invocation(
+            ["/bin/sh", "-c", "sleep 10 & wait"],
+            timeout=0.02,
+        )
+
+        self.assertEqual(code, 124)
+        self.assertIn("timed out", output)
 
 
 if __name__ == "__main__":

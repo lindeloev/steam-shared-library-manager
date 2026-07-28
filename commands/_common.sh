@@ -5,6 +5,55 @@ user_home() {
     getent passwd "$1" | awk -F: 'NR == 1 { print $6 }'
 }
 
+require_plain_absolute_path() {
+    plain_path=$1
+    case "$plain_path" in
+        /*) ;;
+        *) echo "Path must be absolute: $plain_path" >&2; return 1 ;;
+    esac
+    plain_newline='
+'
+    plain_carriage_return=$(printf '\r')
+    plain_tab=$(printf '\t')
+    case "$plain_path" in
+        *"$plain_newline"*|*"$plain_carriage_return"*|*"$plain_tab"*)
+            echo "Path cannot contain control characters." >&2
+            return 1
+            ;;
+    esac
+    printf '%s\n' "$plain_path"
+}
+
+require_safe_library_path() {
+    requested_library=$(require_plain_absolute_path "$1") || return 1
+    canonical_library=$(realpath -m -- "$requested_library" 2>/dev/null) || return 1
+    lexical_library=$(realpath -ms -- "$requested_library" 2>/dev/null) || return 1
+    if [ "$canonical_library" != "$lexical_library" ]; then
+        echo "Refusing symbolic links in library path: $requested_library" >&2
+        return 1
+    fi
+    case "$canonical_library" in
+        /|/usr|/usr/*)
+            echo "Choose a dedicated data location such as /srv/SteamLibrary or a mounted disk." >&2
+            return 1
+            ;;
+    esac
+    printf '%s\n' "$canonical_library"
+}
+
+require_not_personal_steam_root() {
+    checked_library=$1
+    if ! getent passwd | while IFS=: read -r _name _password user_id _group_id _description account_home account_shell; do
+        [ "$user_id" -ge 1000 ] 2>/dev/null || continue
+        case "$account_shell" in */nologin|*/false) continue ;; esac
+        account_steam_root=$(steam_root_for_home "$account_home" 2>/dev/null) || continue
+        [ "$account_steam_root" != "$checked_library" ] || exit 1
+    done; then
+        echo "Refusing to use a person's primary Steam folder as the shared library: $checked_library" >&2
+        return 1
+    fi
+}
+
 # Steam's normal Debian/Ubuntu root is a symlink; accept it only when its final
 # destination remains inside the account's home directory.
 steam_root_for_home() {

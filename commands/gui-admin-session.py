@@ -11,17 +11,38 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import signal
+import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
 HERE = Path(__file__).resolve().parent
 GROUP = "steamgames"
+COMMAND_FILES = (
+    "_common.sh",
+    "add-user.sh",
+    "close-steam.sh",
+    "configure-steam-storage.py",
+    "grant-library-users.sh",
+    "install.sh",
+    "migrate-existing-games.sh",
+    "proton",
+    "repair-shared-library.sh",
+    "setup-shared-library.sh",
+    "status.py",
+)
+PROJECT_FILES = ("steam-shared-library-proton.vdf", "toolmanifest.vdf")
+MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 
 
 def is_absolute_path(value: str) -> bool:
-    return value.startswith("/") and "\0" not in value
+    return (
+        value.startswith("/")
+        and all(ord(character) >= 32 and ord(character) != 127 for character in value)
+    )
 
 
 def are_normal_users(values: list[str]) -> bool:
@@ -113,44 +134,105 @@ def respond(payload: dict[str, object]) -> None:
     print(json.dumps(payload), flush=True)
 
 
+def copy_regular_file(source_directory: int, name: str, destination: Path) -> None:
+    """Copy one already-authorized source file without following a file symlink."""
+    source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_directory)
+    try:
+        source_status = os.fstat(source)
+        if not stat.S_ISREG(source_status.st_mode):
+            raise OSError(f"Project source is not a regular file: {name}")
+        if source_status.st_size > MAX_SOURCE_FILE_BYTES:
+            raise OSError(f"Project source is unexpectedly large: {name}")
+        data = bytearray()
+        while chunk := os.read(source, 64 * 1024):
+            data.extend(chunk)
+            if len(data) > MAX_SOURCE_FILE_BYTES:
+                raise OSError(f"Project source grew unexpectedly large: {name}")
+    finally:
+        os.close(source)
+    destination.write_bytes(data)
+    destination.chmod(0o700)
+
+
+def snapshot_project(destination_root: Path) -> Path:
+    """Freeze helper inputs in a root-private directory for this GUI session."""
+    project = destination_root / "project"
+    commands = project / "commands"
+    commands.mkdir(parents=True, mode=0o700)
+    project.chmod(0o700)
+    commands.chmod(0o700)
+    command_source = os.open(HERE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    project_source = os.open(HERE.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in COMMAND_FILES:
+            copy_regular_file(command_source, name, commands / name)
+        for name in PROJECT_FILES:
+            copy_regular_file(project_source, name, project / name)
+    finally:
+        os.close(command_source)
+        os.close(project_source)
+    return commands
+
+
+def run_invocation(invocation: list[str], timeout: float = 10 * 60) -> tuple[int, str]:
+    """Run one command and terminate its complete process group on timeout."""
+    process = subprocess.Popen(
+        invocation,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        output, _stderr = process.communicate(timeout=timeout)
+        return process.returncode, output
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            output, _stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            output, _stderr = process.communicate()
+        return 124, f"Command timed out after {timeout:g} seconds.\n{output}".rstrip()
+
+
 def main() -> None:
     if os.geteuid() != 0:
         raise SystemExit("This helper must be started through pkexec.")
-    # The GUI closes this pipe when its window closes; EOF ends the session.
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            return
+    with tempfile.TemporaryDirectory(prefix="steam-shared-library-manager-") as temporary:
         try:
-            request = valid_request(json.loads(line))
-        except json.JSONDecodeError:
-            request = None
-        if request is None:
-            respond({"code": 2, "output": "Invalid administrative request."})
-            continue
-        command, arguments = request
-        executable = HERE / command
-        if command == "status.py":
-            invocation = [sys.executable, str(executable), *arguments]
-        else:
-            invocation = [str(executable), *arguments]
-        try:
-            result = subprocess.run(
-                invocation,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=10 * 60,
-            )
-            respond({"code": result.returncode, "output": result.stdout})
-        except subprocess.TimeoutExpired as error:
-            partial = error.stdout or ""
-            if isinstance(partial, bytes):
-                partial = partial.decode(errors="replace")
-            output = f"Command timed out after 10 minutes.\n{partial}".rstrip()
-            respond({"code": 124, "output": output})
+            runtime_commands = snapshot_project(Path(temporary))
         except OSError as error:
-            respond({"code": 127, "output": str(error)})
+            raise SystemExit(f"Could not prepare a private command snapshot: {error}") from error
+        # The GUI closes this pipe when its window closes; EOF ends the session.
+        while True:
+            line = sys.stdin.readline()
+            if not line:
+                return
+            try:
+                request = valid_request(json.loads(line))
+            except json.JSONDecodeError:
+                request = None
+            if request is None:
+                respond({"code": 2, "output": "Invalid administrative request."})
+                continue
+            command, arguments = request
+            executable = runtime_commands / command
+            if command == "status.py":
+                invocation = [sys.executable, "-I", "-B", str(executable), *arguments]
+            else:
+                invocation = [str(executable), *arguments]
+            try:
+                code, output = run_invocation(invocation)
+                respond({"code": code, "output": output})
+            except OSError as error:
+                respond({"code": 127, "output": str(error)})
 
 
 if __name__ == "__main__":

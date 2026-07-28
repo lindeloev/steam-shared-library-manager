@@ -7,12 +7,15 @@ EOF
 }
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
 if [ "$(id -u)" -ne 0 ]; then echo "Run this script with sudo or pkexec." >&2; exit 1; fi
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+. "$script_dir/_common.sh"
 close_steam=false
 if [ "${1:-}" = "--close-steam" ]; then close_steam=true; shift; fi
 default_library=
 if [ "${1:-}" = "--default-library" ]; then
     [ "$#" -ge 2 ] || { usage >&2; exit 2; }
-    default_library=$2
+    default_library=$(require_safe_library_path "$2") || exit 1
+    require_not_personal_steam_root "$default_library" || exit 1
     [ -d "$default_library/steamapps" ] || {
         echo "Not a Steam library: $default_library" >&2
         exit 1
@@ -21,12 +24,10 @@ if [ "${1:-}" = "--default-library" ]; then
 fi
 if [ "${1:-}" != "--group" ] || [ "${3:-}" != "--base-proton" ] || [ "$#" -lt 5 ]; then usage >&2; exit 2; fi
 group_name=$2
-base_proton=$4
+base_proton=$(require_plain_absolute_path "$4") || exit 1
 shift 4
 if ! getent group "$group_name" >/dev/null; then echo "Shared-library group does not exist: $group_name" >&2; exit 1; fi
 [ -x "$base_proton/proton" ] || { echo "Base Proton not found or not executable: $base_proton/proton" >&2; exit 1; }
-script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-. "$script_dir/_common.sh"
 
 # Validate every account before changing any group membership.
 for user_name in "$@"; do

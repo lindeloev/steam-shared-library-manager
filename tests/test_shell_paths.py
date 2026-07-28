@@ -48,6 +48,30 @@ class ShellPathValidationTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Refusing path outside", result.stderr)
 
+    def test_library_path_rejects_symlinked_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            real_parent = base / "real"
+            real_parent.mkdir()
+            linked_parent = base / "linked"
+            linked_parent.symlink_to(real_parent)
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    '. "$1"; require_safe_library_path "$2"',
+                    "sh",
+                    str(COMMON),
+                    str(linked_parent / "SteamLibrary"),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("symbolic links", result.stderr)
+
     def test_prefix_tree_is_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)

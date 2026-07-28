@@ -1,10 +1,10 @@
 # Steam Shared Library Manager
 
 Share one Steam game installation between several Linux accounts without
-sharing settings, Proton state, or non-cloud saves. This makes steam behave
+sharing settings, Proton state, or non-cloud saves. This makes Steam behave
 similar to Windows for multiple users on the same computer.
 
-Steam normally puts non-linux game's Proton prefix beside the shared game in
+Steam normally puts a non-Linux game's Proton prefix beside the shared game in
 `steamapps/compatdata/<appid>`. This project installs a small compatibility
 wrapper that instead uses:
 
@@ -89,7 +89,11 @@ Passwords, authorization, and cached status are never stored.
 
 The GUI starts without administrator access. The first privileged action uses
 the normal PolicyKit prompt, then keeps one narrowly scoped helper alive until
-the window closes. The manager will not close while an operation is active.
+the window closes. At authorization time, that helper copies its fixed command
+set into a root-private temporary directory, so later edits to the checkout
+cannot change the code running in the authorized session. Its Python interpreter
+also runs in isolated, no-bytecode mode. The manager will not close while an
+operation is active.
 
 The bottom **Activity and command log** shows every requested command with
 shell-style argument quoting, its exit code, and its full output. A private
@@ -102,9 +106,11 @@ persistent copy is kept at:
 All programs that inspect or change Steam, account, library, or prefix state
 live in [`commands/`](commands/README.md). The privileged helper accepts a fixed
 allow-list and passes arguments directly—never through a shell. Mutating
-commands preflight paths and accounts, refuse unsafe Steam-root symlinks, and
-use collision-resistant backups and same-directory temporary files before
-atomically replacing Steam configuration.
+commands preflight paths and accounts, refuse symlinked library paths and
+personal primary Steam folders, and use collision-resistant backups and
+same-directory temporary files before atomically replacing Steam
+configuration. The automatic storage writer stops instead of overwriting a
+file changed after its preflight.
 
 Personal prefix directories are forced to mode `700` during installation and
 whenever the wrapper starts. Shared game files and the shared Proton

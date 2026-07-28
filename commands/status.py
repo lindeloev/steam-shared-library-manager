@@ -154,8 +154,17 @@ def steam_is_running(user_name: str) -> bool:
     return result.returncode == 0
 
 
+def comparable_path(path: Path) -> Path:
+    """Normalize a path for status comparisons without requiring it to exist."""
+    try:
+        return path.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return path.absolute()
+
+
 def library_registered(config: Path, library: Path) -> bool:
-    return str(library) in registered_libraries(config)
+    target = comparable_path(library)
+    return any(comparable_path(Path(path)) == target for path in registered_libraries(config))
 
 
 def registered_library_indexes(config: Path) -> dict[str, int]:
@@ -171,7 +180,7 @@ def registered_library_indexes(config: Path) -> dict[str, int]:
             break
         body, closing_brace = result
         path = vdf_value(body, "path").replace("\\\\", "/")
-        if path and "/.steam/" not in path:
+        if path and match.group(1) != "0":
             indexes[path] = int(match.group(1))
         position = closing_brace + 1
     return indexes
@@ -179,7 +188,15 @@ def registered_library_indexes(config: Path) -> dict[str, int]:
 
 def library_is_default(steam_root: Path, config: Path, library: Path) -> bool:
     """Check the per-Steam-account default install-folder selection."""
-    index = registered_library_indexes(config).get(str(library))
+    target = comparable_path(library)
+    index = next(
+        (
+            folder_index
+            for path, folder_index in registered_library_indexes(config).items()
+            if comparable_path(Path(path)) == target
+        ),
+        None,
+    )
     if index is None:
         return False
     safe_configs = steam_localconfigs(steam_root)
@@ -206,8 +223,7 @@ def personal_tool_selected(config: Path) -> bool:
 
 def registered_libraries(config: Path) -> set[str]:
     """Return external Steam library paths recorded by one account."""
-    paths = re.findall(r'"path"\s*"([^"]+)"', read_text(config / "libraryfolders.vdf"))
-    return {path.replace("\\\\", "/") for path in paths if "/.steam/" not in path}
+    return set(registered_library_indexes(config))
 
 
 def library_kind(library: Path) -> str:
@@ -356,6 +372,8 @@ def has_linux_launcher_or_windows_exe(game_dir: Path) -> tuple[bool, bool]:
             for name in files:
                 path = Path(root, name)
                 lower_name = name.lower()
+                if path.is_symlink():
+                    continue
                 if lower_name.endswith(".exe"):
                     windows = True
                 try:
@@ -426,8 +444,16 @@ def available_protons(library: Path) -> list[str]:
     """Return official Proton directories already installed in this library."""
     common = library / "steamapps/common"
     try:
-        choices = [item for item in common.iterdir() if item.is_dir() and item.name.startswith("Proton")
-                   and (item / "proton").is_file() and (item / "proton").stat().st_mode & 0o111]
+        choices = [
+            item
+            for item in common.iterdir()
+            if not item.is_symlink()
+            and item.is_dir()
+            and item.name.startswith("Proton")
+            and not (item / "proton").is_symlink()
+            and (item / "proton").is_file()
+            and (item / "proton").stat().st_mode & 0o111
+        ]
     except OSError:
         return []
     choices.sort(key=lambda item: (item.name != "Proton - Experimental", item.name))

@@ -15,13 +15,14 @@ if [ "${1:-}" != "--base-proton" ] || [ "$#" -lt 3 ]; then usage >&2; exit 2; fi
 # Locate the checked-out assets before touching any user configuration.
 base_proton=$2
 shift 2
-if [ ! -x "$base_proton/proton" ]; then echo "Base Proton not found or not executable: $base_proton/proton" >&2; exit 1; fi
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 project_dir=$(dirname -- "$script_dir")
 [ -f "$project_dir/steam-shared-library-proton.vdf" ] && [ -f "$project_dir/toolmanifest.vdf" ] && [ -f "$script_dir/proton" ] || {
     echo "Project files are incomplete; run from a complete checkout." >&2; exit 1;
 }
 . "$script_dir/_common.sh"
+base_proton=$(require_plain_absolute_path "$base_proton") || exit 1
+if [ ! -x "$base_proton/proton" ]; then echo "Base Proton not found or not executable: $base_proton/proton" >&2; exit 1; fi
 
 tmp_file=
 active_user=

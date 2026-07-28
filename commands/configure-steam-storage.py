@@ -8,7 +8,6 @@ import os
 import pwd
 import re
 import secrets
-import shutil
 import stat
 import subprocess
 import tempfile
@@ -176,20 +175,47 @@ def safe_file(root: Path, path: Path) -> Path:
     return resolved
 
 
-def atomic_update(path: Path, text: str, user: pwd.struct_passwd) -> Path | None:
-    current = path.read_text(encoding="utf-8", errors="strict")
-    if current == text:
+def read_regular_text(path: Path) -> str:
+    """Read one regular file without following a final-component symlink."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"not a regular Steam configuration file: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8", errors="strict") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def atomic_update(
+    path: Path,
+    expected: str,
+    text: str,
+    user: pwd.struct_passwd,
+) -> Path | None:
+    current = read_regular_text(path)
+    if current != expected:
+        raise ValueError(f"Steam configuration changed after preflight; refusing to overwrite: {path}")
+    if expected == text:
         return None
+    path_status = path.lstat()
+    if not stat.S_ISREG(path_status.st_mode):
+        raise ValueError(f"not a regular Steam configuration file: {path}")
+    original_mode = stat.S_IMODE(path_status.st_mode)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     backup_fd, backup_name = tempfile.mkstemp(
         prefix=path.name + f".steam-shared-library-manager-backup.{timestamp}.",
         dir=path.parent,
     )
-    os.close(backup_fd)
     backup = Path(backup_name)
-    shutil.copy2(path, backup)
+    with os.fdopen(backup_fd, "w", encoding="utf-8") as handle:
+        handle.write(expected)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.chown(backup, user.pw_uid, user.pw_gid)
-    backup.chmod(stat.S_IMODE(path.stat().st_mode))
+    backup.chmod(original_mode)
 
     temporary_fd, temporary_name = tempfile.mkstemp(
         prefix=path.name + ".steam-shared-library-manager.",
@@ -202,8 +228,15 @@ def atomic_update(path: Path, text: str, user: pwd.struct_passwd) -> Path | None
             handle.flush()
             os.fsync(handle.fileno())
         os.chown(temporary, user.pw_uid, user.pw_gid)
-        temporary.chmod(stat.S_IMODE(path.stat().st_mode))
+        temporary.chmod(original_mode)
+        if read_regular_text(path) != expected:
+            raise ValueError(f"Steam configuration changed while updating; refusing to overwrite: {path}")
         os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -216,13 +249,16 @@ def prepare_user(
     pwd.struct_passwd,
     Path,
     str,
+    str,
     int,
-    list[tuple[Path, str]],
+    list[tuple[Path, str, str]],
 ]:
     """Validate and prepare every change for one user without writing it."""
     user = pwd.getpwnam(user_name)
     home = Path(user.pw_dir)
     steam_root = safe_steam_root(home)
+    if library == steam_root:
+        raise ValueError("refusing to use this account's primary Steam folder as shared storage")
     if subprocess.run(
         ["pgrep", "-u", user_name, "-x", "steam"],
         stdout=subprocess.DEVNULL,
@@ -232,7 +268,7 @@ def prepare_user(
         raise ValueError(f"Steam is still running for {user_name}")
 
     folders_path = safe_file(steam_root, steam_root / "config/libraryfolders.vdf")
-    original_folders = folders_path.read_text(encoding="utf-8", errors="strict")
+    original_folders = read_regular_text(folders_path)
     folders_text, index = ensure_library_registered(
         original_folders,
         str(library),
@@ -244,11 +280,11 @@ def prepare_user(
     safe_localconfigs = [safe_file(steam_root, path) for path in localconfigs]
     localconfig_updates = []
     for localconfig in safe_localconfigs:
-        original = localconfig.read_text(encoding="utf-8", errors="strict")
+        original = read_regular_text(localconfig)
         localconfig_updates.append(
-            (localconfig, set_default_folder_index(original, index))
+            (localconfig, original, set_default_folder_index(original, index))
         )
-    return user, folders_path, folders_text, index, localconfig_updates
+    return user, folders_path, original_folders, folders_text, index, localconfig_updates
 
 
 def apply_user(
@@ -256,20 +292,22 @@ def apply_user(
         pwd.struct_passwd,
         Path,
         str,
+        str,
         int,
-        list[tuple[Path, str]],
+        list[tuple[Path, str, str]],
     ]
 ) -> None:
     """Apply one fully validated user plan with per-file backups."""
-    user, folders_path, folders_text, _index, localconfig_updates = plan
+    user, folders_path, original_folders, folders_text, _index, localconfig_updates = plan
     user_name = user.pw_name
-    if folders_text != folders_path.read_text(encoding="utf-8", errors="strict"):
-        backup = atomic_update(folders_path, folders_text, user)
+    if folders_text != original_folders:
+        backup = atomic_update(folders_path, original_folders, folders_text, user)
         print(f"{user_name}: registered shared storage; backup: {backup}")
     else:
+        atomic_update(folders_path, original_folders, folders_text, user)
         print(f"{user_name}: shared storage already registered")
-    for localconfig, updated in localconfig_updates:
-        backup = atomic_update(localconfig, updated, user)
+    for localconfig, original, updated in localconfig_updates:
+        backup = atomic_update(localconfig, original, updated, user)
         account_id = localconfig.parents[1].name
         if backup is not None:
             print(f"{user_name}: made shared storage default for Steam account {account_id}; backup: {backup}")
@@ -286,13 +324,27 @@ def main() -> None:
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Run this script with sudo or pkexec.")
-    library = Path(args.library)
-    if not library.is_absolute() or not (library / "steamapps").is_dir():
+    requested_library = Path(args.library)
+    if (
+        not requested_library.is_absolute()
+        or any(ord(character) < 32 or ord(character) == 127 for character in args.library)
+    ):
+        raise SystemExit(f"Invalid Steam library path: {requested_library}")
+    lexical_library = Path(os.path.abspath(args.library))
+    try:
+        library = requested_library.resolve(strict=True)
+    except OSError as error:
+        raise SystemExit(f"Cannot resolve Steam library {requested_library}: {error}") from error
+    if library != lexical_library:
+        raise SystemExit(f"Refusing symbolic links in library path: {requested_library}")
+    if library == Path("/") or library == Path("/usr") or Path("/usr") in library.parents:
+        raise SystemExit(f"Unsafe Steam library path: {library}")
+    if not (library / "steamapps").is_dir():
         raise SystemExit(f"Not a Steam library: {library}")
     plans = []
     for user_name in args.users:
         try:
-            plans.append(prepare_user(user_name, library.resolve(strict=True)))
+            plans.append(prepare_user(user_name, library))
         except (KeyError, OSError, UnicodeError, ValueError) as error:
             raise SystemExit(f"{user_name}: {error}") from error
     for plan in plans:
