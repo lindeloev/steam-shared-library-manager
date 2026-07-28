@@ -1,0 +1,6 @@
+# Runtime state belongs in each user's home directory, never in this repository.
+*.log
+__pycache__/
+*.pyc
+.venv/
+venv/

@@ -1,0 +1,83 @@
+#!/bin/sh
+# Steam Shared Library Manager compatibility wrapper.
+#
+# A tiny Steam compatibility-tool wrapper.  Steam starts this script instead of
+# Proton; the script chooses a compatibility-data directory based on the Unix
+# user and the Steam AppID, then delegates to an ordinary Proton installation.
+# Game files are never copied.
+
+set -eu
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+config_file=$script_dir/base-proton.conf
+
+if [ ! -r "$config_file" ]; then
+    echo "Steam Shared Library Manager: missing $config_file" >&2
+    exit 1
+fi
+
+# The administrator-created configuration contains BASE_PROTON only.  Avoid
+# evaluating arbitrary command text from a system configuration file.
+BASE_PROTON=$(sed -n 's/^BASE_PROTON=//p' "$config_file" | tail -n 1)
+
+if [ -z "$BASE_PROTON" ] || [ ! -x "$BASE_PROTON/proton" ]; then
+    echo "Steam Shared Library Manager: BASE_PROTON is not an executable Proton directory" >&2
+    exit 1
+fi
+
+# Steam normally supplies one of these IDs. Some client versions omit all of
+# them for a custom tool, so the working directory is used as a final fallback.
+app_id=${SteamGameId:-${SteamGameID:-${SteamAppId:-${SteamAppID:-${STEAM_APPID:-}}}}}
+if [ -z "$app_id" ]; then
+    game_dir=${PWD##*/}
+    steamapps_dir=$(dirname "$(dirname "$PWD")")
+
+    # A game is started from steamapps/common/<installdir>. Find the manifest
+    # whose installdir matches that directory and read its numeric AppID.
+    for manifest in "$steamapps_dir"/appmanifest_*.acf; do
+        [ -f "$manifest" ] || continue
+        installdir=$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)"/\1/p' "$manifest")
+        if [ "$installdir" = "$game_dir" ]; then
+            app_id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9][0-9]*\)"/\1/p' "$manifest")
+            break
+        fi
+    done
+fi
+case "$app_id" in
+    ''|*[!0-9]*)
+        echo "Steam Shared Library Manager: Steam game ID is missing or invalid" >&2
+        exit 1
+        ;;
+esac
+
+# HOME is normally present inside Steam's runtime even when its compatibility
+# variables are not. Keep this user's prefix outside the shared library.
+if [ -z "${HOME:-}" ]; then
+    echo "Steam Shared Library Manager: HOME is not set" >&2
+    exit 1
+fi
+case "$HOME" in
+    /*) ;;
+    *)
+        echo "Steam Shared Library Manager: HOME must be an absolute path" >&2
+        exit 1
+        ;;
+esac
+case "${XDG_DATA_HOME:-}" in
+    "") data_home="$HOME/.local/share" ;;
+    /*) data_home=$XDG_DATA_HOME ;;
+    *)
+        echo "Steam Shared Library Manager: XDG_DATA_HOME must be an absolute path" >&2
+        exit 1
+        ;;
+esac
+prefix_root="$data_home/steam-shared-library-proton"
+export STEAM_COMPAT_DATA_PATH="$prefix_root/$app_id"
+
+# Prefixes contain account-specific saves and settings. Correct permissions on
+# every launch so directories created by older versions also become private.
+umask 077
+mkdir -p -- "$STEAM_COMPAT_DATA_PATH"
+chmod 0700 -- "$prefix_root" "$STEAM_COMPAT_DATA_PATH"
+
+exec "$BASE_PROTON/proton" "$@"

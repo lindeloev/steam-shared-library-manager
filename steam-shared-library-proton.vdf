@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+    "compat_tools"
+    {
+        "steam-shared-library-proton"
+        {
+            "install_path" "."
+            "display_name" "Shared library – personal settings (Proton)"
+            "from_oslist" "windows"
+            "to_oslist" "linux"
+        }
+    }
+}
