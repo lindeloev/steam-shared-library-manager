@@ -13,6 +13,7 @@ import json
 import os
 import pwd
 import re
+import stat
 import subprocess
 from pathlib import Path
 
@@ -460,6 +461,29 @@ def available_protons(library: Path) -> list[str]:
     return [str(item) for item in choices]
 
 
+def proton_fixup_status(proton: Path) -> dict[str, object]:
+    """Report whether Proton will attempt its owner-only mode restoration."""
+    manifest = proton / "steampipe_fixups.json"
+    marker = proton / "files/steampipe_fixups_mtime"
+    if not manifest.is_file() or manifest.is_symlink():
+        return {"path": str(proton), "supported": False, "pending": False}
+    try:
+        expected = str(os.path.getmtime(manifest))
+        marker_status = marker.lstat()
+        if not stat.S_ISREG(marker_status.st_mode):
+            raise OSError("fixup marker is not a regular file")
+        current = marker.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (OSError, IndexError):
+        current = ""
+    return {
+        "path": str(proton),
+        "supported": True,
+        "pending": current != expected,
+        "expected_mtime": expected,
+        "marker_mtime": current,
+    }
+
+
 def games(library: Path, users: list[dict[str, object]]) -> list[dict[str, object]]:
     steamapps = library / "steamapps"
     result: list[dict[str, object]] = []
@@ -500,6 +524,7 @@ def main() -> None:
     library = Path(args.library)
     kind = library_kind(library)
     protons = available_protons(library)
+    proton_fixups = [proton_fixup_status(Path(path)) for path in protons]
     accounts = normal_users()
     users = [user_status(user, library, args.group) for user in accounts]
     access_ready, access_problems = shared_access_report(library, accounts, args.group) if kind == "steam_library" else (False, [])
@@ -522,6 +547,8 @@ def main() -> None:
         "base_proton": protons[0] if protons else "",
         "base_proton_ready": bool(protons),
         "available_protons": protons,
+        "proton_fixups": proton_fixups,
+        "proton_fixups_pending": any(item["pending"] for item in proton_fixups),
         "users": users,
         "registered_libraries": libraries,
         "games": games(library, users) if library.is_dir() else [],

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -242,6 +243,23 @@ class StatusTests(unittest.TestCase):
             self.assertEqual([entry["appid"] for entry in report], ["42"])
             self.assertEqual(report[0]["platform"], "Windows / Proton")
             self.assertTrue(report[0]["shared_prefix_exists"])
+
+    def test_proton_fixup_status_uses_exact_python_mtime_string(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            proton = Path(temporary) / "Proton - Experimental"
+            marker = proton / "files/steampipe_fixups_mtime"
+            marker.parent.mkdir(parents=True)
+            manifest = proton / "steampipe_fixups.json"
+            manifest.write_text('{}\n', encoding="utf-8")
+            exact = str(os.path.getmtime(manifest))
+
+            marker.write_text(str(int(os.path.getmtime(manifest))) + "\n", encoding="utf-8")
+            self.assertTrue(self.status.proton_fixup_status(proton)["pending"])
+
+            marker.write_text(exact + "\n", encoding="utf-8")
+            report = self.status.proton_fixup_status(proton)
+            self.assertFalse(report["pending"])
+            self.assertEqual(report["expected_mtime"], exact)
 
 
 if __name__ == "__main__":

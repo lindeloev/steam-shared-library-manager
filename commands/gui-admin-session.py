@@ -30,6 +30,7 @@ COMMAND_FILES = (
     "install.sh",
     "migrate-existing-games.sh",
     "proton",
+    "repair-proton-fixups.py",
     "repair-shared-library.sh",
     "setup-shared-library.sh",
     "status.py",
@@ -82,6 +83,14 @@ def arguments_are_allowed(command: str, arguments: list[str]) -> bool:
             and arguments[0] == "--library"
             and is_absolute_path(arguments[1])
             and arguments[2:] == ["--group", GROUP]
+        )
+    if command == "repair-proton-fixups.py":
+        return (
+            len(arguments) == 4
+            and arguments[0] == "--library"
+            and is_absolute_path(arguments[1])
+            and arguments[2] == "--proton"
+            and is_absolute_path(arguments[3])
         )
     if command == "grant-library-users.sh":
         return (
@@ -224,7 +233,7 @@ def main() -> None:
                 continue
             command, arguments = request
             executable = runtime_commands / command
-            if command == "status.py":
+            if command in ("status.py", "repair-proton-fixups.py"):
                 invocation = [sys.executable, "-I", "-B", str(executable), *arguments]
             else:
                 invocation = [str(executable), *arguments]

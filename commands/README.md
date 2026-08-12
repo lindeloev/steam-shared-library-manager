@@ -14,7 +14,11 @@ root-owned cache files behind.
 
 - `setup-shared-library.sh` creates a missing or empty shared-library folder.
 - `repair-shared-library.sh` repairs group ownership, permissions, and ACLs in a
-  recognized Steam library.
+  recognized Steam library, then reapplies any official Proton SteamPipe modes.
+- `repair-proton-fixups.py` repairs a timestamp-detected official Proton
+  SteamPipe permission restore while Steam and that Proton installation are
+  idle. It validates manifest paths and does not execute code from the shared
+  group-writable Proton directory as root.
 - `grant-library-users.sh` adds existing Linux accounts to the access group.
 - `add-user.sh` combines a clean Steam shutdown, group access, tool install,
   and optional default-storage configuration.
@@ -33,7 +37,8 @@ root-owned cache files behind.
 - `status.py` produces the read-only JSON report used by the GUI.
 - `proton` is copied into each user's Steam configuration. At game launch it
   selects that user's private prefix and delegates to the shared official
-  Proton installation.
+  Proton installation. If Steam omits the AppID and changes working directory,
+  it resolves the game executable argument through the library's app manifests.
 - `gui-admin-session.py` accepts only its fixed command allow-list. It is kept
   alive for one open manager window so PolicyKit authorization is not repeated.
 - `_common.sh` contains shared path validation and prefix-permission helpers; it

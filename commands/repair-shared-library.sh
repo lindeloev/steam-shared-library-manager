@@ -8,7 +8,8 @@ Usage: repair-shared-library.sh --library PATH --group GROUP
 
 Repairs group ownership, group read/write access, setgid directories, and
 default ACLs within an existing PATH/steamapps library. It refuses arbitrary
-non-Steam folders and never follows symlinks.
+non-Steam folders and never follows symlinks. Pending official Proton
+SteamPipe file modes are restored after the shared permissions are repaired.
 EOF
 }
 
@@ -35,5 +36,15 @@ find -P "$library" -exec chgrp --no-dereference -- "$group_name" {} +
 find -P "$library" -type f -exec chmod g+rw {} +
 find -P "$library" -type d -exec chmod g+rwx,g+s {} +
 find -P "$library" -type d -exec setfacl -m "g:$group_name:rwx,m::rwx,d:g:$group_name:rwx,d:m::rwx" {} +
+
+# The broad group-write repair above can undo the deliberately read-only modes
+# recorded by official Proton. Reapply those modes and refresh Proton's exact
+# mtime marker while Steam is already known to be closed.
+for proton_dir in "$library"/steamapps/common/Proton*; do
+    [ -d "$proton_dir" ] || continue
+    [ ! -L "$proton_dir" ] || continue
+    [ -f "$proton_dir/steampipe_fixups.json" ] || continue
+    "$script_dir/repair-proton-fixups.py" --library "$library" --proton "$proton_dir"
+done
 
 echo "Repaired shared access for Steam library: $library"

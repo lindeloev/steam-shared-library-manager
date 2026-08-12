@@ -15,6 +15,53 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProtonWrapperTests(unittest.TestCase):
+    def test_app_id_is_found_from_game_executable_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = root / "tool"
+            base_proton = root / "base-proton"
+            data_home = root / "data"
+            steamapps = root / "Shared Library/steamapps"
+            game = steamapps / "common/Example Game/Binaries/Win64/Game.exe"
+            runtime_working_directory = root / "runtime"
+            tool.mkdir()
+            base_proton.mkdir()
+            game.parent.mkdir(parents=True)
+            runtime_working_directory.mkdir()
+            (steamapps / "appmanifest_4242.acf").write_text(
+                '"AppState" { "appid" "4242" "installdir" "Example Game" }\n',
+                encoding="utf-8",
+            )
+
+            wrapper = tool / "proton"
+            shutil.copy2(ROOT / "commands/proton", wrapper)
+            wrapper.chmod(0o755)
+            delegated = base_proton / "proton"
+            delegated.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            delegated.chmod(0o755)
+            (tool / "base-proton.conf").write_text(
+                f"BASE_PROTON={base_proton}\n",
+                encoding="utf-8",
+            )
+
+            environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key not in {"SteamGameId", "SteamGameID", "SteamAppId", "SteamAppID", "STEAM_APPID"}
+            }
+            environment.update({"HOME": str(root / "home"), "XDG_DATA_HOME": str(data_home)})
+            result = subprocess.run(
+                [str(wrapper), "waitforexitandrun", str(game)],
+                cwd=runtime_working_directory,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((data_home / "steam-shared-library-proton/4242").is_dir())
+
     def test_existing_prefix_permissions_are_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

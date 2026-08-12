@@ -93,6 +93,19 @@ class RequestValidationTests(unittest.TestCase):
             ("add-user.sh", request["arguments"]),
         )
 
+    def test_accepts_only_scoped_proton_fixup_repair_paths(self) -> None:
+        arguments = [
+            "--library", "/srv/SteamLibrary",
+            "--proton", "/srv/SteamLibrary/steamapps/common/Proton - Experimental",
+        ]
+        self.assertEqual(
+            self.module.valid_request({"command": "repair-proton-fixups.py", "arguments": arguments}),
+            ("repair-proton-fixups.py", arguments),
+        )
+        self.assertIsNone(
+            self.module.valid_request({"command": "repair-proton-fixups.py", "arguments": ["--proton", "/tmp/x"]})
+        )
+
     def test_project_snapshot_is_private_and_complete(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             commands = self.module.snapshot_project(Path(temporary))

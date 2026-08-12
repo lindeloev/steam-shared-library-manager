@@ -147,6 +147,8 @@ class SharedSteamGui(tk.Tk):
         self.activity.grid_remove()
         self.steam_client_warning = ttk.Label(header, foreground="#991b1b", wraplength=780)
         self.steam_client_warning.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.proton_fixup_warning = ttk.Label(header, foreground="#991b1b", wraplength=780)
+        self.proton_fixup_warning.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
         header.columnconfigure(1, weight=1)
 
         self.setup_tab = ttk.Frame(self, padding=12)
@@ -324,6 +326,23 @@ class SharedSteamGui(tk.Tk):
             found = self.find_base_proton()
             if found:
                 ttk.Label(content, text="Detected official Proton: " + found, wraplength=590).pack(anchor="w")
+            pending_fixups = [item for item in self.status.get("proton_fixups", []) if item.get("pending")]
+            if pending_fixups:
+                ttk.Label(
+                    content,
+                    text="Shared Proton update needs permission restoration before another Linux user can launch it:\n• "
+                         + "\n• ".join(str(item["path"]) for item in pending_fixups),
+                    foreground="#991b1b",
+                    justify="left",
+                    wraplength=590,
+                ).pack(anchor="w", pady=(10, 4))
+                for item in pending_fixups:
+                    path = str(item["path"])
+                    ttk.Button(
+                        content,
+                        text="Repair pending fixups: " + Path(path).name,
+                        command=lambda selected=path: self.offer_proton_fixup_repair(selected),
+                    ).pack(anchor="w", pady=(4, 0))
             instructions = (
                 "Proton is Steam's compatibility tool for Windows-only games on Linux. Install it once in the shared folder.\n\n"
                 "1. Choose one person from Step 1. If they were just added to the shared-game group, log out of Ubuntu and back in first.\n\n"
@@ -809,11 +828,17 @@ class SharedSteamGui(tk.Tk):
             self.log_message("EXIT 0", "success")
             self.populate_status()
             self.status_checked = True
-            self.status_label.configure(text="Full status checked: " + datetime.now().strftime("%H:%M:%S"), foreground="#166534")
+            if self.status.get("proton_fixups_pending"):
+                self.status_label.configure(text="Action needed: shared Proton permission restore pending", foreground="#991b1b")
+            else:
+                self.status_label.configure(text="Full status checked: " + datetime.now().strftime("%H:%M:%S"), foreground="#166534")
             self.update_journey()
             problems = [str(problem) for problem in self.status.get("shared_access_problems", [])]
             if problems:
                 self.log_message("Shared access is not ready:\n- " + "\n- ".join(problems))
+            pending = [str(item["path"]) for item in self.status.get("proton_fixups", []) if item.get("pending")]
+            if pending:
+                self.log_message("Shared Proton permission restore is pending:\n- " + "\n- ".join(pending), "error")
             self.log_message("Status refreshed.")
             if after is not None:
                 after()
@@ -853,6 +878,43 @@ class SharedSteamGui(tk.Tk):
                            "Steam was closed. Repairing shared-library access now.", 2,
                            after_success=repair)
 
+    def offer_proton_fixup_repair(self, proton: str) -> None:
+        """Repair one detected official Proton update after an idle check."""
+        text = (
+            "This shared Proton update has a pending SteamPipe permission restore:\n\n"
+            + proton
+            + "\n\nSteam and Proton must be idle for every user. The manager will restore the modes "
+              "recorded by Proton and write Proton's exact modification-time marker. Continue?"
+        )
+        if not messagebox.askyesno("Repair shared Proton update", text, parent=self):
+            return
+
+        def repair() -> None:
+            self.run_admin(
+                "repair-proton-fixups.py",
+                ["--library", self.library.get(), "--proton", proton],
+                "Shared Proton permissions were restored. Status will now be refreshed.",
+                4,
+                after_success=self.refresh_status,
+            )
+
+        running = [str(user["name"]) for user in self.status.get("users", []) if user.get("steam_running")]
+        if not running:
+            repair()
+            return
+        close_text = (
+            "Steam is running for: " + ", ".join(running)
+            + ".\n\nClose those Steam clients and then repair the shared Proton update?"
+        )
+        if messagebox.askyesno("Close Steam before Proton repair", close_text, parent=self):
+            self.run_admin(
+                "close-steam.sh",
+                running,
+                "Steam was closed. Repairing shared Proton now.",
+                4,
+                after_success=repair,
+            )
+
     def offer_selected_access_then_repair(self) -> None:
         """Grant selected users before asking Steam to use an existing library."""
         report = {str(user["name"]): user for user in self.status.get("users", [])}
@@ -873,6 +935,13 @@ class SharedSteamGui(tk.Tk):
         self.user_names = [str(user["name"]) for user in users]
         self.selected_names.intersection_update(self.user_names)
         self.update_steam_client_warning()
+        pending = [Path(str(item["path"])).name for item in self.status.get("proton_fixups", []) if item.get("pending")]
+        if pending:
+            self.proton_fixup_warning.configure(
+                text="Shared Proton permission restore pending: " + ", ".join(pending) + ". Open Step 4 to repair before launching games."
+            )
+        else:
+            self.proton_fixup_warning.configure(text="")
         self.update_journey()
 
     def update_steam_client_warning(self) -> None:
@@ -1031,18 +1100,20 @@ class SharedSteamGui(tk.Tk):
 
         self.set_card(3, "#dcfce7" if session_ready else "#e5e7eb")
 
-        if self.status.get("base_proton_ready"):
+        if self.status.get("proton_fixups_pending"):
+            self.set_card(4, "#fee2e2")
+        elif self.status.get("base_proton_ready"):
             self.set_card(4, "#dcfce7")
         else:
             self.set_card(4, "#e5e7eb")
 
         if 5 in self.failed_steps:
             self.set_card(5, "#fee2e2")
-        elif not selected or not self.status.get("base_proton_ready"):
+        elif not selected or not self.status.get("base_proton_ready") or self.status.get("proton_fixups_pending"):
             self.set_card(5, "#e5e7eb")
         elif users and any(not user["steam_initialized"] for user in users):
             self.set_card(5, "#fee2e2")
-        elif users and all(
+        elif not self.status.get("proton_fixups_pending") and users and all(
             user["in_group"]
             and user["tool_installed"]
             and (not self.make_library_default.get() or user.get("library_default"))
@@ -1054,6 +1125,8 @@ class SharedSteamGui(tk.Tk):
 
         if not selected:
             self.set_card(6, "#e5e7eb")
+        elif self.status.get("proton_fixups_pending"):
+            self.set_card(6, "#fee2e2")
         elif users and all(
             user["library_registered"]
             and user["tool_installed"]

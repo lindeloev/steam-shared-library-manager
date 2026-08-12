@@ -67,6 +67,11 @@ The manager guides you through six steps:
    the shared folder as each person's default Steam storage.
 6. Finish the remaining account-specific Steam setting and check game status.
 
+The status check also detects an official Proton update whose SteamPipe
+permission restore is still pending. Step 4 turns red and offers an idle-only,
+administrator repair. This condition can recur whenever shared Proton is
+updated by a different Linux user.
+
 Step 4 includes an illustrated, previous/next Steam guide showing where to add
 the shared storage folder, find an official Proton under **Library → Tools**,
 and—after Step 5—select the personal-settings tool under
@@ -117,6 +122,14 @@ whenever the wrapper starts. Shared game files and the shared Proton
 installation are writable by the selected access group, so group members must
 be trusted: any member able to update shared games can also alter executables
 another member may later run.
+
+The wrapper tolerates Steam runtimes that omit AppID environment variables and
+start outside the game directory by matching an absolute launch argument below
+`steamapps/common/<installdir>` to `appmanifest_*.acf`. For shared official
+Proton updates, the manager compares `str(os.path.getmtime())` for
+`steampipe_fixups.json` with `files/steampipe_fixups_mtime`. Its privileged
+repair implements the recorded mode restoration in trusted manager code rather
+than executing a group-writable Proton script as root.
 
 ## Command line
 

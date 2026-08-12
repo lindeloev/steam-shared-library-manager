@@ -26,21 +26,45 @@ if [ -z "$BASE_PROTON" ] || [ ! -x "$BASE_PROTON/proton" ]; then
 fi
 
 # Steam normally supplies one of these IDs. Some client versions omit all of
-# them for a custom tool, so the working directory is used as a final fallback.
+# them for a custom tool, so inspect both the working directory and the launch
+# arguments before giving up. Current Steam runtimes can start a compatibility
+# tool outside the game's directory while still passing the absolute Windows
+# executable path to Proton.
 app_id=${SteamGameId:-${SteamGameID:-${SteamAppId:-${SteamAppID:-${STEAM_APPID:-}}}}}
-if [ -z "$app_id" ]; then
-    game_dir=${PWD##*/}
-    steamapps_dir=$(dirname "$(dirname "$PWD")")
-
-    # A game is started from steamapps/common/<installdir>. Find the manifest
-    # whose installdir matches that directory and read its numeric AppID.
+find_manifest_app_id() {
+    steamapps_dir=$1
+    game_dir=$2
     for manifest in "$steamapps_dir"/appmanifest_*.acf; do
         [ -f "$manifest" ] || continue
-        installdir=$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)"/\1/p' "$manifest")
+        installdir=$(sed -n 's/.*"installdir"[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest")
         if [ "$installdir" = "$game_dir" ]; then
-            app_id=$(sed -n 's/.*"appid"[[:space:]]*"\([0-9][0-9]*\)"/\1/p' "$manifest")
-            break
+            sed -n 's/.*"appid"[[:space:]]*"\([0-9][0-9]*\)".*/\1/p' "$manifest" | head -n 1
+            return
         fi
+    done
+}
+
+if [ -z "$app_id" ]; then
+    case "$PWD" in
+        */steamapps/common/*)
+            steamapps_dir=${PWD%%/steamapps/common/*}/steamapps
+            relative_game_path=${PWD#*/steamapps/common/}
+            game_dir=${relative_game_path%%/*}
+            app_id=$(find_manifest_app_id "$steamapps_dir" "$game_dir")
+            ;;
+    esac
+fi
+if [ -z "$app_id" ]; then
+    for argument do
+        case "$argument" in
+            /*/steamapps/common/*)
+                steamapps_dir=${argument%%/steamapps/common/*}/steamapps
+                relative_game_path=${argument#*/steamapps/common/}
+                game_dir=${relative_game_path%%/*}
+                app_id=$(find_manifest_app_id "$steamapps_dir" "$game_dir")
+                [ -z "$app_id" ] || break
+                ;;
+        esac
     done
 fi
 case "$app_id" in
