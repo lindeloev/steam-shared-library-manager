@@ -123,4 +123,14 @@ umask 077
 mkdir -p -- "$STEAM_COMPAT_DATA_PATH"
 chmod 0700 -- "$prefix_root" "$STEAM_COMPAT_DATA_PATH"
 
-exec "$BASE_PROTON/proton" "$@"
+# Record the actual delegated result, never treating prefix existence as proof
+# that a game launched. This remains a diagnostic, not a gameplay guarantee.
+if "$BASE_PROTON/proton" "$@"; then
+    launch_status=0
+else
+    launch_status=$?
+fi
+receipt=$(mktemp "$STEAM_COMPAT_DATA_PATH/.manager-launch.XXXXXX")
+printf 'UID=%s\nBASE_PROTON=%s\nEXIT_CODE=%s\n' "$(id -u)" "$BASE_PROTON" "$launch_status" > "$receipt"
+mv -f -- "$receipt" "$STEAM_COMPAT_DATA_PATH/.manager-last-launch"
+exit "$launch_status"

@@ -36,7 +36,7 @@ class ManagerModelTests(unittest.TestCase):
             "commands/install.sh --base-proton '/srv/Proton Experimental'",
         )
 
-    def test_unlaunched_but_safe_game_is_green(self) -> None:
+    def test_unlaunched_game_is_configured_without_claiming_launch_success(self) -> None:
         rows = build_game_rows(
             [{
                 "appid": "42",
@@ -52,7 +52,7 @@ class ManagerModelTests(unittest.TestCase):
             ["adam", "jonas"],
         )
 
-        self.assertEqual(rows[0].tag, "ready_for_everyone")
+        self.assertEqual(rows[0].tag, "configured_for_everyone")
         self.assertIn("prefix created on first launch: adam", rows[0].values[3])
         self.assertIn("shared prefix exists", rows[0].values[3])
 

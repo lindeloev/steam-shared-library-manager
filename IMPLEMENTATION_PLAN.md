@@ -43,3 +43,7 @@ Additional requirements:
   currently shared, plus shared Hotfix and three runtimes. Steam is running.
   Added location audit/comparison and MANUAL_TEST.md; removed guaranteed-placement
   claims. Actual download placement remains an explicit final acceptance check.
+
+- Step 4 complete: mixed/native file scans no longer prove launch safety; separate
+  configured/recorded-launch states; runtime dependency, manifest freshness, launcher
+  permissions and wrapper version verified; Proton exit results recorded privately.

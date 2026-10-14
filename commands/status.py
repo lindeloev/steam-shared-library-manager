@@ -8,6 +8,7 @@ it through pkexec when inspecting other users' private Steam directories.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import grp
 import json
 import os
@@ -354,6 +355,37 @@ def shared_access_report(library: Path, users: list[pwd.struct_passwd], group_na
     return not problems, problems
 
 
+def wrapper_health(root: Path, tool: Path | None, local_protons: list[str]) -> tuple[bool, list[str]]:
+    problems = []
+    if tool is None:
+        return False, ["Personal wrapper is missing"]
+    launcher = tool / "proton"
+    if launcher.is_symlink() or not launcher.is_file() or not os.access(launcher, os.X_OK):
+        problems.append("Wrapper launcher is missing or not executable")
+    base = read_text(tool / "base-proton.conf").removeprefix("BASE_PROTON=").splitlines()[0:1]
+    proton = Path(base[0]) if base else Path("/nonexistent")
+    if str(proton) not in local_protons:
+        problems.append("Configured Proton is not installed locally")
+    installed = read_text(tool / "toolmanifest.vdf")
+    expected = read_text(proton / "toolmanifest.vdf")
+    required = vdf_value(expected, "require_tool_appid")
+    if vdf_value(installed, "commandline") != "/proton %verb%" or vdf_value(installed, "require_tool_appid") != required:
+        problems.append("Wrapper runtime manifest needs refresh after a Proton update")
+    if required:
+        manifest = read_text(root / f"steamapps/appmanifest_{required}.acf")
+        directory = vdf_value(manifest, "installdir")
+        candidate = root / "steamapps/common" / directory
+        if not directory or not safe_existing_descendant(root, candidate) or not candidate.is_dir():
+            problems.append(f"Required runtime {required} is missing from local storage")
+    try:
+        expected_wrapper = Path(__file__).with_name("proton").read_bytes()
+        if hashlib.sha256(launcher.read_bytes()).digest() != hashlib.sha256(expected_wrapper).digest():
+            problems.append("Wrapper is outdated; rerun setup")
+    except OSError:
+        problems.append("Cannot verify wrapper version")
+    return not problems, problems
+
+
 def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict[str, object]:
     home = Path(user.pw_dir)
     steam_root = safe_steam_root(home)
@@ -381,10 +413,16 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         read_text(tool_dir / "base-proton.conf").removeprefix("BASE_PROTON=").strip()
         if tool_dir is not None else ""
     )
+    healthy, tool_problems = wrapper_health(steam_root, tool_dir, local_protons) if steam_root is not None else (False, ["Steam is not initialized"])
     prefixes: list[str] = []
+    launches: list[str] = []
     if prefix_root is not None:
         try:
             prefixes = sorted(item.name for item in prefix_root.iterdir() if item.is_dir() and item.name.isdigit())
+            for appid in prefixes:
+                marker = read_text(prefix_root / appid / ".manager-last-launch")
+                if "EXIT_CODE=0\n" in marker and f"UID={user.pw_uid}\n" in marker and f"BASE_PROTON={configured_proton}\n" in marker:
+                    launches.append(appid)
         except OSError:
             pass
     return {
@@ -404,10 +442,9 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         ),
         "local_library_default": local_library_is_default(steam_root) if steam_root is not None else False,
         "available_protons": local_protons,
-        "tool_installed": (
-            (tool_dir / "proton").is_file() and configured_proton in local_protons
-            if tool_dir is not None else False
-        ),
+        "tool_installed": healthy,
+        "tool_problems": tool_problems,
+        "successful_launches": launches,
         "personal_tool_selected": mappings.get("0") == TOOL_ID,
         "compat_tool_mappings": mappings,
         "steam_running": steam_is_running(user.pw_name),
@@ -487,17 +524,17 @@ def game_user_state(user: dict[str, object], appid: str, kind: str) -> str:
             return "non_personal_override"
         if not user.get("tool_installed"):
             return "tool_missing"
-        return "personal_created" if appid in user.get("prefixes", []) else "personal_ready"
+        return "launch_recorded" if appid in user.get("successful_launches", []) else "personal_created" if appid in user.get("prefixes", []) else "personal_ready"
 
     if kind in ("native", "mixed"):
-        return "native"
+        return "launch_mode_unknown"
     if kind == "windows":
         default_tool = mappings.get("0")
         if default_tool != TOOL_ID:
             return "non_personal_default" if default_tool else "personal_tool_not_selected"
         if not user.get("tool_installed"):
             return "tool_missing"
-        return "personal_created" if appid in user.get("prefixes", []) else "personal_ready"
+        return "launch_recorded" if appid in user.get("successful_launches", []) else "personal_created" if appid in user.get("prefixes", []) else "personal_ready"
     return "unknown"
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SAFE_GAME_STATES = {"native", "personal_ready", "personal_created"}
+SAFE_GAME_STATES = {"native", "personal_ready", "personal_created", "launch_recorded"}
 GAME_STATE_LABELS = {
     "library_not_added": "shared folder not added",
     "non_personal_override": "non-personal per-game override",
@@ -16,6 +16,7 @@ GAME_STATE_LABELS = {
     "personal_tool_not_selected": "personal tool not selected",
     "tool_missing": "wrapper not installed",
     "unknown": "unknown",
+    "launch_mode_unknown": "Steam launch mode needs verification",
 }
 
 
@@ -66,8 +67,8 @@ def build_game_rows(games: list[dict[str, object]], selected: list[str]) -> list
         elif ready:
             waiting = [name for name in selected if states.get(name) == "personal_ready"]
             readiness = (
-                "Ready; prefix created on first launch: " + ", ".join(waiting)
-                if waiting else "Ready"
+                "Configured; prefix created on first launch: " + ", ".join(waiting)
+                if waiting else "Configured; private prefix exists"
             )
         else:
             problems = [
@@ -76,6 +77,9 @@ def build_game_rows(games: list[dict[str, object]], selected: list[str]) -> list
                 if states.get(name) not in SAFE_GAME_STATES
             ]
             readiness = "Review — " + "; ".join(problems)
+        confirmed = bool(selected) and all(states.get(name) == "launch_recorded" for name in selected)
+        if confirmed:
+            readiness = "Proton launch succeeded for every selected person"
         if game.get("shared_prefix_exists"):
             readiness += "; shared prefix exists"
 
@@ -89,6 +93,6 @@ def build_game_rows(games: list[dict[str, object]], selected: list[str]) -> list
                 readiness,
                 setups,
             ),
-            tag="ready_for_everyone" if ready else "needs_attention" if selected else "",
+            tag="ready_for_everyone" if confirmed else "configured_for_everyone" if ready else "needs_attention" if selected else "",
         ))
     return rows

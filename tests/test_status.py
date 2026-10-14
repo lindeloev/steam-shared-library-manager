@@ -177,6 +177,29 @@ class StatusTests(unittest.TestCase):
             self.assertEqual(self.status.shared_support_tools(library), ["Proton 99.0", "SteamLinuxRuntime_future"])
             self.assertEqual(self.status.games(library, []), [])
 
+    def test_local_wrapper_rejects_missing_runtime_and_stale_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            proton = root / "steamapps/common/Proton - Experimental"
+            tool = root / "compatibilitytools.d" / self.status.TOOL_ID
+            proton.mkdir(parents=True)
+            tool.mkdir(parents=True)
+            manifest = '"manifest" { "commandline" "/proton %verb%" "require_tool_appid" "1628350" }'
+            (proton / "toolmanifest.vdf").write_text(manifest)
+            (tool / "toolmanifest.vdf").write_text(manifest)
+            (tool / "base-proton.conf").write_text(f"BASE_PROTON={proton}\n")
+            (tool / "proton").write_bytes((ROOT / "commands/proton").read_bytes())
+            (tool / "proton").chmod(0o755)
+            ready, problems = self.status.wrapper_health(root, tool, [str(proton)])
+            self.assertFalse(ready)
+            self.assertTrue(any("runtime" in problem for problem in problems))
+            runtime = root / "steamapps/common/SteamLinuxRuntime_sniper"
+            runtime.mkdir()
+            (root / "steamapps/appmanifest_1628350.acf").write_text('"AppState" { "appid" "1628350" "installdir" "SteamLinuxRuntime_sniper" }')
+            self.assertTrue(self.status.wrapper_health(root, tool, [str(proton)])[0])
+            (proton / "toolmanifest.vdf").write_text(manifest.replace("1628350", "4183110"))
+            self.assertFalse(self.status.wrapper_health(root, tool, [str(proton)])[0])
+
     def test_game_readiness_does_not_require_an_existing_prefix(self) -> None:
         user = {
             "library_registered": True,
@@ -204,7 +227,7 @@ class StatusTests(unittest.TestCase):
             "non_personal_override",
         )
 
-    def test_mixed_install_defaults_to_native_without_override(self) -> None:
+    def test_mixed_install_requires_launch_verification_without_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             game = Path(temporary)
             linux_launcher = game / "game_linux"
@@ -229,7 +252,7 @@ class StatusTests(unittest.TestCase):
                     "42",
                     kind,
                 ),
-                "native",
+                "launch_mode_unknown",
             )
 
     def test_shared_library_is_not_mistaken_for_native_launcher(self) -> None:
