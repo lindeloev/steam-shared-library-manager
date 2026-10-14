@@ -108,6 +108,21 @@ def load_migration():
 MIGRATION = load_migration()
 
 
+def describe_setup(user, args, storage):
+    root = storage.safe_steam_root(Path(user.pw_dir))
+    result = {"account": user.pw_name, "local_root": str(root), "shared_library": str(args.library),
+              "prefix_root": str(choose_prefix(user, root, args)), "changes": ["Register shared game storage", "Select local remembered install destination", "Install personal wrapper", "Select wrapper by default; preserve per-game overrides"]}
+    try:
+        proton = local_proton(root, args.base_proton)
+        source = MANIFEST.generate(storage.read_regular_text(storage.safe_file(root, proton / "toolmanifest.vdf")))
+        runtime = VDF.scalar(VDF.object_entry(source, "manifest"), "require_tool_appid")
+        result.update(proton=str(proton), runtime_appid=runtime,
+                      runtime_local=(not runtime or (root / f"steamapps/appmanifest_{runtime}.acf").is_file()))
+    except (OSError, ValueError) as error:
+        result["error"] = str(error)
+    print(json.dumps(result))
+
+
 def migrate_tools(user, args, storage, dry_run):
     root = storage.safe_steam_root(Path(user.pw_dir))
     items = MIGRATION.plan(root, args.library, VDF)
@@ -149,6 +164,30 @@ def load_transactions():
     return module
 
 TRANSACTIONS = load_transactions()
+
+
+def load_manifest():
+    spec = importlib.util.spec_from_file_location("manifest", HERE / "manifest-helper.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+MANIFEST = load_manifest()
+
+
+def choose_prefix(user, root, args):
+    saved = read_settings(root)
+    prefix = Path(saved.get("prefix_root", str(Path(user.pw_dir) / ".local/share" / TOOL_ID)))
+    if getattr(args, "data_home", None):
+        prefix = Path(args.data_home) / TOOL_ID
+    legacy = Path(user.pw_dir) / ".local/share/steam-per-user-proton"
+    if not prefix.exists() and legacy.is_dir() and not legacy.is_symlink():
+        prefix = legacy
+    if not prefix.is_absolute() or prefix.is_symlink() or any(ord(c) < 32 for c in str(prefix)):
+        raise ValueError("Prefix root must be an absolute private directory without a symlink")
+    if prefix.exists() and (not prefix.is_dir() or prefix.stat().st_uid != user.pw_uid):
+        raise ValueError("Prefix root must belong to this account")
+    return prefix.resolve()
 
 
 def read_asset(path: Path) -> bytes:
@@ -196,7 +235,8 @@ def install(user, args, storage, assets, dry_run):
     plan = storage.prepare_user(user.pw_name, None)
     root = storage.safe_steam_root(Path(user.pw_dir))
     proton = local_proton(root, args.base_proton)
-    manifest = storage.read_regular_text(storage.safe_file(root, proton / "toolmanifest.vdf"))
+    manifest = MANIFEST.generate(storage.read_regular_text(storage.safe_file(root, proton / "toolmanifest.vdf")))
+    prefix = choose_prefix(user, root, args)
     parent = root / "compatibilitytools.d"
     if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
         raise ValueError(f"Unsafe compatibility tool directory: {parent}")
@@ -216,12 +256,21 @@ def install(user, args, storage, assets, dry_run):
     receipt = TRANSACTIONS.start(root, "wrapper", {"destination": str(tool), "staging": str(staged), "backup": str(backup)})
     swapped = False
     try:
-        contents = {"proton": assets["proton"], "compatibilitytool.vdf": assets["registration"].replace(TOOL_ID.encode(), tool_id.encode()),
-                    "toolmanifest.vdf": manifest.encode(), "base-proton.conf": f"BASE_PROTON={proton}\n".encode()}
+        registration = assets["registration"].decode().replace(TOOL_ID, tool_id)
+        if tool_id != TOOL_ID:
+            registration = VDF.set_in_object(registration, tool_id, "display_name", "Personal settings – " + proton.name)
+        contents = {"proton": assets["proton"], "compatibilitytool.vdf": registration.encode(),
+                    "toolmanifest.vdf": manifest.encode(), "base-proton.conf": f"BASE_PROTON={proton}\nPREFIX_ROOT={prefix}\n".encode(),
+                    "manifest-helper.py": assets["manifest-helper"], "vdf.py": assets["vdf"]}
         for name, content in contents.items():
             path = staged / name
             path.write_bytes(content)
             path.chmod(0o755 if name == "proton" else 0o644)
+        recovery = read_settings(root)
+        recovery["prefix_root"] = str(prefix)
+        save_settings(root, recovery)
+        if prefix.exists():
+            prefix.chmod(0o700)
         storage.apply_user(plan)
         if tool.exists():
             tool.rename(backup)
@@ -296,9 +345,9 @@ def uninstall(user, args, storage, dry_run):
     updated = remove_managed_mappings(original, storage, read_settings(root)["previous_mappings"])
     paths = [path for path in (root / "compatibilitytools.d").glob("*") if VDF.managed(path.name)]
     if args.remove_prefixes:
-        paths += [Path(user.pw_dir) / ".local/share" / name for name in (TOOL_ID, "steam-per-user-proton")]
+        paths += [Path(read_settings(root).get("prefix_root", str(Path(user.pw_dir) / ".local/share" / TOOL_ID))), Path(user.pw_dir) / ".local/share/steam-per-user-proton"]
     for path in paths:
-        if path.is_symlink() or not path.resolve().is_relative_to(Path(user.pw_dir).resolve()):
+        if path.is_symlink() or (path.exists() and path.stat().st_uid != user.pw_uid):
             raise ValueError(f"Refusing unsafe removal: {path}")
     if dry_run:
         return
@@ -350,15 +399,18 @@ STORAGE = load_storage()
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("install", "storage", "uninstall", "migrate", "tools"), required=True)
+    parser.add_argument("--action", choices=("install", "storage", "uninstall", "migrate", "tools", "plan"), required=True)
     parser.add_argument("--base-proton", default="Proton - Experimental")
     parser.add_argument("--library", type=Path)
+    parser.add_argument("--data-home", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--remove-prefixes", action="store_true")
     parser.add_argument("--replace-conflicts", action="store_true")
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("users", nargs="+")
     args = parser.parse_args()
+    if args.action == "plan":
+        args.dry_run = True
     storage = STORAGE
     if args.library is not None:
         spec = importlib.util.spec_from_file_location("library_backend", HERE / "library-backend.py")
@@ -366,7 +418,8 @@ def main():
         spec.loader.exec_module(library_backend)
         args.library = library_backend.validate_library(args.library)
     assets = {"proton": read_asset(HERE / "proton"),
-              "registration": read_asset(HERE.parent / "steam-shared-library-proton.vdf")}
+              "registration": read_asset(HERE.parent / "steam-shared-library-proton.vdf"),
+              "manifest-helper": read_asset(HERE / "manifest-helper.py"), "vdf": read_asset(HERE / "vdf.py")}
     users = [pwd.getpwnam(name) for name in args.users]
     baseline = None
     if args.action == "tools":
@@ -401,7 +454,9 @@ def main():
                 TRANSACTIONS.finish(receipt, "failed", str(error))
             raise
     def execute_action(user, dry):
-        if args.action == "tools":
+        if args.action == "plan":
+            describe_setup(user, args, storage)
+        elif args.action == "tools":
             migrate_tools(user, args, storage, dry)
         elif args.action == "install":
             install(user, args, storage, assets, dry)
@@ -428,7 +483,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        with LOCK.admin_lock():
+        if "--dry-run" in sys.argv or ("--action" in sys.argv and sys.argv[sys.argv.index("--action") + 1] == "plan"):
             main()
+        else:
+            with LOCK.admin_lock():
+                main()
     except (OSError, ValueError, KeyError) as error:
         raise SystemExit(str(error)) from error

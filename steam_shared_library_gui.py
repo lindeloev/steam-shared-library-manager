@@ -11,6 +11,7 @@ from __future__ import annotations
 import grp
 import json
 import os
+import tempfile
 import pwd
 import subprocess
 import sys
@@ -163,6 +164,7 @@ class SharedSteamGui(tk.Tk):
             text="Shows every requested command, its exit status, and action or error output.",
             foreground="#555555",
         ).pack(side="left")
+        ttk.Button(log_toolbar, text="Export diagnostics", command=self.export_diagnostics).pack(side="right", padx=(6, 0))
         ttk.Button(log_toolbar, text="Copy", command=self.copy_log).pack(side="right")
         ttk.Button(log_toolbar, text="Clear", command=self.clear_log).pack(side="right", padx=(0, 6))
         log_view = ttk.Frame(log_panel)
@@ -274,7 +276,7 @@ class SharedSteamGui(tk.Tk):
                 self.update_journey()
 
             ttk.Button(content, text="Use selected people", command=use_people).pack(anchor="w")
-            ttk.Label(content, text="Preparing a new shared folder in Step 2 adds these people to its access group. At least the current desktop account must be selected before using Steam in Step 4.", wraplength=590).pack(anchor="w", pady=(12, 0))
+            ttk.Label(content, text="Preparing a new shared folder in Step 2 adds these people to its access group. The administrator can configure other accounts without adding their own account.", wraplength=590).pack(anchor="w", pady=(12, 0))
         elif step == 2:
             ttk.Label(content, text="Shared folder path:").pack(anchor="w")
             path_entry = ttk.Entry(content, textvariable=self.library, width=62)
@@ -295,16 +297,16 @@ class SharedSteamGui(tk.Tk):
         elif step == 3:
             current = self.current_user_name()
             if current not in self.selected_names:
-                message = ("Select the current desktop account (“" + current + "”) in Step 1 before continuing. "
-                           "Steam must run as an account with access to the shared folder.")
+                message = ("You are administering other accounts. Your own account does not need shared access. "
+                           "The full status check verifies the selected accounts; continue once their access is ready.")
             elif not self.current_user_configured_in_group():
                 message = ("“" + current + "” has not yet been granted shared-library access. Return to Step 2 and use the folder again; it will offer to grant access.")
             elif self.current_user_has_library_access():
                 message = ("Current session: ready. “" + current + "” can access shared storage in this running desktop session. Continue to Step 4.")
             else:
-                message = ("“" + current + "” is configured for shared-library access, but this running desktop session does not have the new group yet. "
-                           "Close Steam, then fully restart the user session. If logging out/in leaves this message unchanged, reboot the computer. "
-                           "Afterwards, open a new terminal and check that `id -nG` includes steamgames before starting Steam.")
+                message = ("“" + current + "” is configured for shared access, but this desktop cannot access the library yet. "
+                           "Use Step 2 to repair named user ACLs. Check that the library’s parent folders allow access. "
+                           "Then use Recheck this session.")
             ttk.Label(content, text=message, wraplength=590).pack(anchor="w")
             ttk.Button(content, text="Recheck this session", command=lambda: self.update_journey()).pack(anchor="w", pady=(12, 0))
         elif step == 4:
@@ -335,7 +337,7 @@ class SharedSteamGui(tk.Tk):
             ttk.Button(content, text="Open Proton installation in Steam", command=self.open_proton_install).pack(anchor="w", pady=(8, 0))
             instructions = (
                 "Proton is Steam's compatibility tool for Windows-only games on Linux. Each person installs it in their local library. Keep Proton and Steam Linux Runtime out of shared storage.\n\n"
-                "1. Repeat for each person from Step 1. If they were just added to the shared-game group, log out of Ubuntu and back in first.\n\n"
+                "1. Repeat for each person from Step 1. Setup grants direct access without a logout. The admin can configure other accounts without selecting their own account.\n\n"
                 "2. Start the native Steam client and sign in. For a new Steam account, let Steam complete its first-time setup.\n\n"
                 "Use the illustrated Steam guide below. Its final card previews the account-specific setting you will apply after Step 5."
             )
@@ -492,8 +494,8 @@ class SharedSteamGui(tk.Tk):
                 None,
             ),
             (
-                "4. Later, select the personal-settings tool",
-                "Do this after Step 5 for each person's Steam account. Open Steam → Settings → Compatibility, enable Steam Play if requested, and choose “Shared library – personal settings (Proton)” as the default compatibility tool.",
+                "4. Restart Steam and confirm the setup",
+                "Step 5 selects the personal wrapper automatically. Restart Steam and confirm the choice in Settings → Compatibility. Per-game overrides are preserved.",
                 HERE / "media/gui/steam_compatibility.png",
             ),
         )
@@ -675,6 +677,30 @@ class SharedSteamGui(tk.Tk):
         self.clipboard_append(text)
         self.update_idletasks()
 
+    def export_diagnostics(self) -> None:
+        path = filedialog.asksaveasfilename(parent=self, title="Export diagnostic report", defaultextension=".json", filetypes=[("JSON report", "*.json")])
+        if not path:
+            return
+        # Use a deliberately small schema; never export raw VDF, recovery originals,
+        # session environment, or the full activity log.
+        users = [{key: user.get(key) for key in ("name", "steam_client", "inspection_complete", "in_group", "steam_initialized", "library_registered", "local_library_default", "tool_installed", "tool_problems", "available_protons", "prefix_root", "personal_tool_selected")}
+                 for user in self.status.get("users", [])]
+        report = {"schema": 1, "generated": datetime.now().isoformat(timespec="seconds"), "library": self.library.get(),
+                  "selected_users": self.selected_users(), "status_checked": self.status_checked,
+                  "shared_access_problems": self.status.get("shared_access_problems", []),
+                  "shared_support_tools": self.status.get("shared_support_tools", []), "users": users,
+                  "games": [{key: game.get(key) for key in ("appid", "name", "platform", "user_states", "shared_prefix_exists")} for game in self.status.get("games", [])]}
+        fd, temporary = tempfile.mkstemp(prefix=".sslm-report-", dir=Path(path).parent)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(report, handle, indent=2)
+                handle.write("\n")
+            os.replace(temporary, path)
+            self.log_message("Private diagnostic report exported: " + path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def begin_activity(self, message: str) -> None:
         """Show that a background action is alive rather than a frozen GUI."""
         self.active_tasks += 1
@@ -776,12 +802,12 @@ class SharedSteamGui(tk.Tk):
             if code == 0:
                 if step is not None:
                     self.failed_steps.discard(step)
-                messagebox.showinfo("Completed", success, parent=dialog_parent)
+                self.status_label.configure(text=success, foreground="#166534")
                 self.update_journey()
                 if after_success is not None:
                     after_success()
                 else:
-                    self.log_message("Use Refresh full status when you want to confirm the new state.")
+                    self.refresh_status()
             else:
                 if step is not None:
                     self.failed_steps.add(step)
@@ -826,9 +852,6 @@ class SharedSteamGui(tk.Tk):
             problems = [str(problem) for problem in self.status.get("shared_access_problems", [])]
             if problems:
                 self.log_message("Shared access is not ready:\n- " + "\n- ".join(problems))
-            pending = [str(item["path"]) for item in self.status.get("proton_fixups", []) if item.get("pending")]
-            if pending:
-                self.log_message("Shared Proton permission restore is pending:\n- " + "\n- ".join(pending), "error")
             self.log_message("Status refreshed.")
             if after is not None:
                 after()
@@ -868,43 +891,6 @@ class SharedSteamGui(tk.Tk):
                            "Steam was closed. Repairing shared-library access now.", 2,
                            after_success=repair)
 
-    def offer_proton_fixup_repair(self, proton: str) -> None:
-        """Repair one detected official Proton update after an idle check."""
-        text = (
-            "This shared Proton update has a pending SteamPipe permission restore:\n\n"
-            + proton
-            + "\n\nSteam and Proton must be idle for every user. The manager will restore the modes "
-              "recorded by Proton and write Proton's exact modification-time marker. Continue?"
-        )
-        if not messagebox.askyesno("Repair shared Proton update", text, parent=self):
-            return
-
-        def repair() -> None:
-            self.run_admin(
-                "repair-proton-fixups.py",
-                ["--library", self.library.get(), "--proton", proton],
-                "Shared Proton permissions were restored. Status will now be refreshed.",
-                4,
-                after_success=self.refresh_status,
-            )
-
-        running = [str(user["name"]) for user in self.status.get("users", []) if user.get("steam_running")]
-        if not running:
-            repair()
-            return
-        close_text = (
-            "Steam is running for: " + ", ".join(running)
-            + ".\n\nClose those Steam clients and then repair the shared Proton update?"
-        )
-        if messagebox.askyesno("Close Steam before Proton repair", close_text, parent=self):
-            self.run_admin(
-                "close-steam.sh",
-                running,
-                "Steam was closed. Repairing shared Proton now.",
-                4,
-                after_success=repair,
-            )
-
     def offer_selected_access_then_repair(self) -> None:
         """Grant selected users before asking Steam to use an existing library."""
         report = {str(user["name"]): user for user in self.status.get("users", [])}
@@ -912,10 +898,10 @@ class SharedSteamGui(tk.Tk):
         if missing:
             text = ("The selected people do not yet have access to this shared folder:\n\n"
                     + ", ".join(missing)
-                    + "\n\nGrant them access now? They must then log out and back in before Steam can use the folder.")
+                    + "\n\nGrant them access now? Named user ACLs give existing sessions immediate access.")
             if messagebox.askyesno("Grant shared-library access", text, parent=self):
-                self.run_admin("grant-library-users.sh", ["--group", GROUP, *missing],
-                               "Shared-library access granted. Continue with Step 3 after logging out and back in.", 2,
+                self.run_admin("grant-library-users.sh", ["--group", GROUP, "--library", self.library.get(), *missing],
+                               "Direct shared-library access granted. Continue with the access check.", 2,
                                after_success=lambda: self.refresh_status(after=self.offer_shared_access_repair))
             return
         self.offer_shared_access_repair()
@@ -968,7 +954,7 @@ class SharedSteamGui(tk.Tk):
         else:
             ttk.Label(
                 frame,
-                text="Green means every selected person's current configuration is safe. "
+                text="Green means a successful Proton launch was recorded; blue means configuration checks passed. "
                      "A personal setup is created only after that person launches a Windows game.",
                 foreground="#555555",
             ).pack(anchor="w", pady=(4, 8))
@@ -981,6 +967,7 @@ class SharedSteamGui(tk.Tk):
             ).pack(anchor="w", pady=(0, 8))
         columns = ("appid", "game", "platform", "readiness", "setups")
         tree = ttk.Treeview(frame, columns=columns, show="headings")
+        tree.tag_configure("configured_for_everyone", background="#dbeafe", foreground="#1e40af")
         tree.tag_configure("ready_for_everyone", background="#dcfce7", foreground="#166534")
         tree.tag_configure("needs_attention", background="#fee2e2", foreground="#991b1b")
         for column, title, width in (
@@ -1015,7 +1002,7 @@ class SharedSteamGui(tk.Tk):
         instructions = (
             "1. Start the native Steam client and sign in as that person.\n\n"
             + storage_instruction
-            + "3. Open Steam → Settings → Compatibility. Enable Steam Play if Steam asks, then choose “Shared library – personal settings (Proton)” as the default compatibility tool.\n\n"
+            + "3. Open Steam → Settings → Compatibility. Enable Steam Play if Steam asks, confirm “Shared library – personal settings (Proton)” is selected. Setup normally handles this automatically.\n\n"
             "4. Restart Steam. Windows games will create that person's private game settings automatically the first time they are launched. Native Linux games need no private setup."
         )
         tk.Label(frame, text=instructions, justify="left", anchor="nw", wraplength=650).pack(fill="x")
@@ -1053,8 +1040,7 @@ class SharedSteamGui(tk.Tk):
         if not self.step_cards:
             return
         selected = bool(self.selected_users())
-        session_ready = (selected and self.current_user_name() in self.selected_names
-                         and self.current_user_has_library_access())
+        session_ready = bool(selected and (self.current_user_has_library_access() if self.current_user_name() in self.selected_names else self.status.get("shared_access_ready")))
         if not self.status_checked:
             self.set_card(1, "#dcfce7" if selected else "#e5e7eb")
             self.set_card(2, "#fee2e2" if 2 in self.failed_steps else "#e5e7eb")
@@ -1145,20 +1131,29 @@ class SharedSteamGui(tk.Tk):
         if proton is None:
             messagebox.showwarning("Complete Step 4 first", "Each selected person needs an official Proton in their local library. Open Step 4 for installation steps.", parent=parent or self)
             return
-        text = "Set up shared-library access and personal Windows-game settings for: " + ", ".join(users) + "?\n\nThe tool checks whether Steam is running and asks it to close before making changes."
-        text += "\n\nThe shared folder will be registered for games, and each local library made default for tools. Changed Steam configuration files are backed up first."
-        if messagebox.askyesno("Configure users", text, parent=parent or self):
-            arguments = ["--close-steam"]
-            arguments.extend(["--default-library", self.library.get()])
-            arguments.extend(["--group", GROUP, "--base-proton", proton, *users])
-            self.run_admin(
-                "add-user.sh",
-                arguments,
-                "People configured. Compatibility selections are configured. Refresh status and restart Steam.",
-                5,
-                parent,
-                self.refresh_status,
-            )
+        def preview(code, output):
+            if code != 0:
+                self.log_message(output, "error")
+                messagebox.showerror("Setup preview failed", output, parent=parent or self)
+                return
+            try:
+                plans = [json.loads(line) for line in output.splitlines() if line.strip()]
+            except ValueError:
+                messagebox.showerror("Invalid preview", "See the command log for details.", parent=parent or self)
+                return
+            errors = [plan["account"] + ": " + plan["error"] for plan in plans if plan.get("error")]
+            if errors:
+                messagebox.showwarning("Local tools needed", "\n".join(errors), parent=parent or self)
+                return
+            details = "\n\n".join(plan["account"] + "\nProton: " + plan.get("proton", "missing")
+                                    + "\nRuntime: " + (plan.get("runtime_appid") or "none required") + (" (local)" if plan.get("runtime_local") else " (needs local installation)")
+                                    + "\nPersonal settings: " + plan["prefix_root"] for plan in plans)
+            text = details + "\n\nRegister shared games, select local install preferences, install personal wrappers, and select them automatically? Per-game overrides are preserved. Steam closes first; changed settings and previous wrappers are backed up. Game-update permission monitoring will be enabled."
+            if not messagebox.askyesno("Review account setup", text, parent=parent or self):
+                return
+            self.run_admin("add-user.sh", ["--close-steam", "--default-library", self.library.get(), "--group", GROUP, "--base-proton", proton, *users],
+                           "Accounts configured. Restart Steam to load their personal wrappers.", 5, parent, self.refresh_status)
+        self.run_admin_async("preview-setup.py", ["--library", self.library.get(), "--base-proton", proton, *users], preview, "Preparing account setup preview…")
 
     def open_proton_install(self) -> None:
         # The desktop's own Steam protocol handler runs without administrator privileges.

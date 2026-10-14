@@ -39,11 +39,11 @@ class AccountWorkerTests(unittest.TestCase):
         self.proton.mkdir(parents=True)
         (self.proton / "proton").write_text('#!/bin/sh\nexit 0\n')
         (self.proton / "proton").chmod(0o755)
-        (self.proton / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton %verb%" "require_tool_appid" "1628350" }')
+        (self.proton / "toolmanifest.vdf").write_text('"manifest" { "version" "2" "commandline" "/proton %verb%" "require_tool_appid" "1628350" }')
         account = pwd.getpwuid(os.getuid())
         self.user = SimpleNamespace(pw_name=account.pw_name, pw_dir=str(self.home), pw_uid=account.pw_uid, pw_gid=account.pw_gid)
         self.args = SimpleNamespace(base_proton=str(self.proton), remove_prefixes=False)
-        self.assets = {"proton": b'#!/bin/sh\nexit 0\n', "registration": b'"compatibilitytools" {}'}
+        self.assets = {"proton": b'#!/bin/sh\nexit 0\n', "registration": b'"compatibilitytools" {}', "manifest-helper": (ROOT / "commands/manifest-helper.py").read_bytes(), "vdf": (ROOT / "commands/vdf.py").read_bytes()}
         self.patches = [mock.patch.object(self.storage.pwd, "getpwnam", return_value=self.user),
                         mock.patch.object(self.storage.subprocess, "run", return_value=SimpleNamespace(returncode=1))]
         for patch in self.patches:
@@ -85,6 +85,17 @@ class AccountWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Pinned proton_90"):
             self.worker.migrate(self.user, self.args, self.storage, self.assets, False)
         self.assertEqual(self.worker.VDF.mappings(self.config.read_text())["42"]["name"], "proton_90")
+
+    def test_existing_legacy_prefix_is_preserved_as_configured_location(self):
+        legacy = self.home / ".local/share/steam-per-user-proton"
+        legacy.mkdir(parents=True)
+        (legacy / "42").mkdir()
+        self.worker.install(self.user, self.args, self.storage, self.assets, False)
+        tool = self.root / "compatibilitytools.d" / self.worker.TOOL_ID
+        values = self.worker.MANIFEST.config((tool / "base-proton.conf").read_text())
+        self.assertEqual(values["PREFIX_ROOT"], str(legacy))
+        self.assertTrue((legacy / "42").exists())
+        self.assertEqual(legacy.stat().st_mode & 0o777, 0o700)
 
     def test_storage_write_refuses_symlinked_parent(self):
         outside = self.home / "outside"

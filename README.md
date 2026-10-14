@@ -61,11 +61,11 @@ The manager guides you through six steps:
 1. Choose the Linux accounts that will share games.
 2. Prepare a missing/empty folder, or inspect and repair an existing Steam
    library.
-3. Log out and back in so new group membership reaches the desktop session.
+3. Check access. Direct user ACLs normally make a logout unnecessary.
 4. Install an official Proton in each person’s local Steam library.
 5. Close Steam, install the personal-settings wrapper, register the shared
    game folder, and keep each local library as the default for tools.
-6. Finish the remaining account-specific Steam setting and check game status.
+6. Restart Steam and check configuration and recorded game launches.
 
 The manager selects each person's primary local library as Steam's remembered
 install destination. Dependency placement also depends on Steam's own install
@@ -75,18 +75,29 @@ game, choose the shared folder (for example `/srv/SteamLibrary`) in **Install To
 Steam has a single install default, so this also means new games initially offer
 local storage. Keep local storage as default even after installing a shared game.
 
-Step 4 detects misplaced Proton and runtime installations, including new versions
-by their names. For an existing setup, install those tools locally for each person
-and remove the shared copies through Steam before continuing. The manager does
-not silently move or delete existing installations. Each person still selects the
-wrapper under **Settings → Compatibility**. The wrapper always uses that person's
-local Proton and its matching runtime dependency.
+Step 4 previews and copies misplaced Proton and runtime packages into every
+selected account's local library. This also handles runtimes with no Steam move
+menu and Hotfix destination conflicts. Identical packages are verified and kept;
+different local copies are backed up before explicitly approved replacement.
+Runtime `var/` caches are recreated by each user. Shared sources are retained in
+quarantine only after all registered users' local copies verify.
 
-These defaults do not prevent someone explicitly selecting shared storage for a
-tool or later changing Steam's default. Refresh status to detect misplaced tools
-or an incorrect default; rerun setup to restore the local default.
+Step 5 shows the proposed Proton version, runtime and private prefix location
+for each person. It configures the wrapper selection automatically and preserves
+per-game overrides. The administrator can configure other accounts without
+adding their own account to the shared library. Every account must have signed
+in to native Steam at least once; the manager does not handle Steam credentials.
 
-Selections survive the required logout/login in:
+Existing games already in shared storage are recognized and their permissions
+can be repaired. Moving games from a person's private library remains a Steam
+Storage operation; the manager does not silently reorganize private game installs.
+
+Steam's remembered install destination can change. Actual tool locations are
+checked separately; a local preference is not a placement guarantee. The
+read-only `commands/audit-install-locations.py` records locations and compares
+new downloads. See [MANUAL_TEST.md](MANUAL_TEST.md) for the acceptance procedure.
+
+Navigation selections are saved in:
 
 ```text
 ~/.config/steam-shared-library-manager/state.json
@@ -118,8 +129,10 @@ allow-list and passes arguments directly—never through a shell. Mutating
 commands preflight paths and accounts, refuse symlinked library paths and
 personal primary Steam folders, and use collision-resistant backups and
 same-directory temporary files before atomically replacing Steam
-configuration. The automatic storage writer stops instead of overwriting a
-file changed after its preflight.
+configuration. Account files are written after permanently dropping to the target account.
+The storage writer uses pinned directory handles and stops if a file changed
+after preflight. GUI and command-line changes are serialized with the permissions
+monitor; per-account locks prevent simultaneous setup writes.
 
 Personal prefix directories are forced to mode `700` during installation and
 whenever the wrapper starts. Shared game files are writable by the selected
@@ -130,6 +143,41 @@ another member may later run.
 The wrapper tolerates Steam runtimes that omit AppID environment variables and
 start outside the game directory by matching an absolute launch argument below
 `steamapps/common/<installdir>` to `appmanifest_*.acf`.
+
+## Automatic update permissions and recovery
+
+Preparing or repairing a library installs a root-owned systemd service:
+`steam-shared-library-manager.service`. It checks completed game manifest updates
+every 30 seconds and restores group and named user ACL access to affected game
+files. It excludes Proton and runtimes, refuses linked/special and root/service-owned
+files, and never executes downloaded game code. The service also reconciles named
+ACLs when group membership changes. Without systemd, manual repair remains available.
+Existing group credentials can persist in already-running sessions after membership
+removal, as with ordinary Unix groups.
+
+The installed monitor code is under `/usr/local/lib/steam-shared-library-manager`;
+its root-owned library configuration is under `/etc/steam-shared-library-manager`.
+Monitor messages are available with:
+
+```bash
+journalctl -u steam-shared-library-manager.service
+```
+
+Wrapper and tool replacement is staged and verified. Recovery records and previous
+wrapper/tool copies are stored under each primary Steam root in
+`.steam-shared-library-manager/operations` and `backups`. Interrupted publications
+are recovered on the next mutating command. Shared tool quarantine is under
+`LIBRARY/.steam-shared-library-manager/quarantine`. Backups and quarantine are
+retained; no automatic cleanup deletes them.
+
+The wrapper generates a manifest from validated Proton fields. If an update changes
+its runtime dependency, it refreshes that manifest and requires a Steam restart.
+A retry under the same Steam process does not bypass that guard.
+
+The GUI distinguishes configuration checks from recorded Proton launch success.
+Native/mixed file layouts are reported as uncertain rather than used as proof of
+Steam's launch mode. **Export diagnostics** writes a private JSON report of relevant
+status, excluding raw Steam configuration, recovery originals and session environment.
 
 ## Command line
 
@@ -156,8 +204,9 @@ Run any script with `--help` and see
 
 ## Update or remove
 
-Close Steam and rerun `install.sh` to update the wrapper or select a different
-preferred local official Proton.
+Close Steam and rerun setup or `install.sh` to update the wrapper or select a
+different preferred local official Proton. Original selections are saved so
+uninstall can restore them when they still refer to this manager.
 
 To remove only this project's Steam registration:
 
@@ -165,7 +214,9 @@ To remove only this project's Steam registration:
 sudo ./commands/uninstall.sh user1 user2
 ```
 
-Existing per-user prefixes and shared games remain. Removing prefixes can erase
+Existing per-user prefixes, shared games, library access and update monitoring
+remain. Uninstall removes managed compatibility selections and restores recorded
+previous choices without overwriting choices the person changed afterwards. Removing prefixes can erase
 local saves and settings, so it requires an explicit flag:
 
 ```bash
@@ -182,6 +233,8 @@ The current implementation has been usage-tested on two multi-user Ubuntu
 Contributions and reports from other native Debian/Ubuntu configurations are
 welcome through the [GitHub issue tracker][issues].
 
+The current implementation has automated regression coverage; the new admin
+setup, migration and monitor flow still needs the final manual test on this PC.
 Run the standard-library regression tests with:
 
 ```bash

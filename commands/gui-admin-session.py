@@ -29,6 +29,8 @@ COMMAND_FILES = (
     "vdf.py",
     "operation-lock.py",
     "transactions.py",
+    "manifest-helper.py",
+    "preview-setup.py",
     "permission-monitor.py",
     "install-permission-monitor.py",
     "tool-migration.py",
@@ -103,11 +105,14 @@ def arguments_are_allowed(command: str, arguments: list[str]) -> bool:
             and is_absolute_path(arguments[3])
         )
     if command == "grant-library-users.sh":
-        return (
-            len(arguments) >= 3
-            and arguments[:2] == ["--group", GROUP]
-            and are_normal_users(arguments[2:])
-        )
+        if arguments[:2] != ["--group", GROUP]:
+            return False
+        offset = 2
+        if arguments[offset:offset + 1] == ["--library"]:
+            if len(arguments) < offset + 3 or not is_absolute_path(arguments[offset + 1]):
+                return False
+            offset += 2
+        return are_normal_users(arguments[offset:])
     if command == "add-user.sh":
         if arguments[:1] != ["--close-steam"]:
             return False
@@ -123,6 +128,10 @@ def arguments_are_allowed(command: str, arguments: list[str]) -> bool:
             and is_absolute_path(arguments[offset + 3])
             and are_normal_users(arguments[offset + 4:])
         )
+    if command == "preview-setup.py":
+        return (len(arguments) >= 5 and arguments[0] == "--library" and is_absolute_path(arguments[1])
+                and arguments[2] == "--base-proton" and is_absolute_path(arguments[3])
+                and are_normal_users(arguments[4:]))
     if command == "migrate-shared-tools.sh":
         offset = 0
         for flag in ("--dry-run", "--replace-conflicts", "--cleanup"):
@@ -269,7 +278,7 @@ def main() -> None:
                 invocation = [str(executable), *arguments]
             try:
                 lock = SESSION_LOCK
-                if command == "status.py" or "--dry-run" in arguments:
+                if command in ("status.py", "preview-setup.py") or "--dry-run" in arguments:
                     code, output = run_invocation(invocation)
                 else:
                     with lock.admin_lock():

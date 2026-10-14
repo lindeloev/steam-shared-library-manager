@@ -18,6 +18,7 @@ fi
 
 # The administrator-created configuration contains BASE_PROTON only.  Avoid
 # evaluating arbitrary command text from a system configuration file.
+CONFIGURED_PREFIX=$(sed -n 's/^PREFIX_ROOT=//p' "$config_file" | tail -n 1)
 BASE_PROTON=$(sed -n 's/^BASE_PROTON=//p' "$config_file" | tail -n 1)
 
 if [ -z "$BASE_PROTON" ] || [ ! -x "$BASE_PROTON/proton" ]; then
@@ -114,22 +115,42 @@ case "${XDG_DATA_HOME:-}" in
         exit 1
         ;;
 esac
-prefix_root="$data_home/steam-shared-library-proton"
+prefix_root=${CONFIGURED_PREFIX:-"$data_home/steam-shared-library-proton"}
+case "$prefix_root" in
+    /*) ;;
+    *) echo "Steam Shared Library Manager: prefix root must be absolute" >&2; exit 1 ;;
+esac
+if [ -L "$prefix_root" ] || [ -L "$prefix_root/$app_id" ]; then
+    echo "Steam Shared Library Manager: refusing symlinked personal prefix" >&2
+    exit 1
+fi
+if [ -f "$script_dir/manifest-helper.py" ]; then
+    python3 -I -B "$script_dir/manifest-helper.py" --tool-dir "$script_dir"
+fi
 export STEAM_COMPAT_DATA_PATH="$prefix_root/$app_id"
 
 # Prefixes contain account-specific saves and settings. Correct permissions on
 # every launch so directories created by older versions also become private.
 umask 077
 mkdir -p -- "$STEAM_COMPAT_DATA_PATH"
+if [ "$(stat -c '%u' -- "$prefix_root")" != "$(id -u)" ] || [ "$(stat -c '%u' -- "$STEAM_COMPAT_DATA_PATH")" != "$(id -u)" ]; then
+    echo "Steam Shared Library Manager: personal prefix must belong to this account" >&2
+    exit 1
+fi
 chmod 0700 -- "$prefix_root" "$STEAM_COMPAT_DATA_PATH"
 
 # Record the actual delegated result, never treating prefix existence as proof
 # that a game launched. This remains a diagnostic, not a gameplay guarantee.
-if "$BASE_PROTON/proton" "$@"; then
+"$BASE_PROTON/proton" "$@" &
+proton_pid=$!
+trap 'kill -TERM "$proton_pid" 2>/dev/null || true' TERM HUP
+trap 'kill -INT "$proton_pid" 2>/dev/null || true' INT
+if wait "$proton_pid"; then
     launch_status=0
 else
     launch_status=$?
 fi
+trap - TERM HUP INT
 receipt=$(mktemp "$STEAM_COMPAT_DATA_PATH/.manager-launch.XXXXXX")
 printf 'UID=%s\nBASE_PROTON=%s\nEXIT_CODE=%s\n' "$(id -u)" "$BASE_PROTON" "$launch_status" > "$receipt"
 mv -f -- "$receipt" "$STEAM_COMPAT_DATA_PATH/.manager-last-launch"

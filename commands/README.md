@@ -1,56 +1,67 @@
 # Commands and trust boundary
 
-Every program that inspects or changes shared-library, Steam-account, or Proton
-prefix state lives in this directory. The GUI only gathers choices, shows
-status, and sends an allow-listed command plus an argument array to
-`gui-admin-session.py`.
-At authorization time the helper freezes these files in a root-private
-temporary snapshot; subsequent edits to the checkout cannot alter that
-authorized session. The privileged Python interpreter uses isolated,
-no-bytecode mode so it neither imports checkout-local modules nor leaves
-root-owned cache files behind.
+The unprivileged GUI sends allow-listed argument arrays to `gui-admin-session.py`.
+Authorization freezes a private root-owned command snapshot. Privileged Python
+runs in isolated, no-bytecode mode. Account files are mutated only after the worker
+permanently drops to the selected account's UID and groups. Downloaded binaries
+are never executed as root. Administrator operations and account writes are locked.
 
-## Administrative commands
+## Setup and administration
 
-- `setup-shared-library.sh` creates a missing or empty shared-library folder.
-- `repair-shared-library.sh` repairs group ownership, permissions, and ACLs in a
-  recognized Steam library, then reapplies any official Proton SteamPipe modes.
-- `repair-proton-fixups.py` repairs a timestamp-detected official Proton
-  SteamPipe permission restore while Steam and that Proton installation are
-  idle. It validates manifest paths and does not execute code from the shared
-  group-writable Proton directory as root.
-- `grant-library-users.sh` adds existing Linux accounts to the access group.
-- `add-user.sh` combines a clean Steam shutdown, group access, tool install,
-  and optional shared-folder registration. Local storage is always made default.
-- `configure-steam-storage.py` registers the shared game folder and selects the primary local
-  library (index 0) as the default for each initialized Steam account. It is invoked
-  by `add-user.sh` when `--default-library` is used. `install.sh` also uses
-  `--local-only` to restore the local default without registering another library.
-- `close-steam.sh` asks selected users' native Steam clients to exit; `--force`
-  is an explicit SIGTERM fallback when desktop IPC is unavailable or ignored.
-- `install.sh` installs or updates the compatibility wrapper for selected users.
-- `migrate-existing-games.sh` backs up and changes explicit Proton mappings.
-- `uninstall.sh` removes this tool and, only with `--remove-prefixes`, personal
-  Proton prefixes.
+- `setup-shared-library.sh --library PATH --group GROUP USER...` prepares an empty
+  dedicated game library, adds group members, grants immediate named user ACLs,
+  and installs the game-update permission monitor.
+- `repair-shared-library.sh --library PATH --group GROUP` validates dedicated
+  storage and repairs pinned filesystem objects; private/system locations,
+  symlink escapes, hardlinks, special and root/service-owned files are refused.
+  Proton/runtime directories are excluded. It also installs/updates the monitor.
+- `grant-library-users.sh --group GROUP [--library PATH] USER...` adds members;
+  with a library, repairs direct ACL access for already-running sessions.
+- `add-user.sh --close-steam --default-library PATH --group GROUP --base-proton PATH USER...`
+  closes selected Steam clients, grants access, installs local wrappers, selects
+  them by default, and registers shared storage with a local remembered destination.
+- `install.sh --base-proton PATH USER...` stages per-account wrappers without
+  root writes in home directories. Every person needs local Proton. Per-game
+  overrides remain unchanged; their default previous choice is recorded.
+- `migrate-existing-games.sh --dry-run|--apply USER...` preserves pinned official
+  Proton versions using separate personal wrappers. Missing local versions cause
+  a clear refusal rather than substitution.
+- `migrate-shared-tools.sh [--dry-run] [--replace-conflicts] [--cleanup] --library PATH USER...`
+  copies and hashes tool packages and app manifests, excludes runtime UID caches,
+  removes shared permissions from local copies and retains conflict backups.
+  Cleanup quarantines sources after every registered account's copy verifies.
+- `uninstall.sh [--remove-prefixes] USER...` restores previous managed mappings
+  while preserving later user choices. Saves remain unless explicitly removed;
+  shared games/access and the separate monitor remain.
+- `close-steam.sh [--force] USER...` requests desktop-session Steam shutdown.
+  Forced SIGTERM requires explicit selection; configuration is not edited live.
 
-## Read-only and runtime commands
+## Inspection and internals
 
-- `status.py` produces the read-only JSON report used by the GUI.
-- `proton` is copied into each user's Steam configuration. At game launch it
-  selects that user's private prefix and delegates to that person’s local official
-  Proton installation. Installation requires local Proton for every selected user
-  and copies its tool manifest to preserve the matching runtime dependency. If Steam omits the AppID and changes working directory,
-  it resolves the game executable argument through the library's app manifests.
-- `gui-admin-session.py` accepts only its fixed command allow-list. It is kept
-  alive for one open manager window so PolicyKit authorization is not repeated.
-- `_common.sh` contains shared path validation and prefix-permission helpers; it
-  is sourced by other commands and is not a standalone command.
+- `status.py --library PATH --group GROUP` produces structured read-only status.
+- `preview-setup.py --library PATH --base-proton PATH USER...` describes proposed
+  per-account setup, including local runtime dependencies and prefix locations.
+- `audit-install-locations.py --library PATH [--compare BASELINE.json]` records
+  actual tool locations for the signed-in account and the shared library.
+- `account-worker.py` loads trusted assets before dropping identity, preflights
+  accounts, stages changes and records recovery. Its `--data-home PATH` option
+  can configure an owned private prefix location outside the default; it is
+  persisted in the wrapper and used consistently by status and uninstall.
+- `proton` uses the configured private prefix and local Proton, refreshes its
+  runtime manifest, forwards termination and records the delegated exit result.
+- `manifest-helper.py` generates manifests from validated fields and guards
+  runtime dependency changes until Steam restarts.
+- `vdf.py` provides strict parsing and source-preserving edits across backends.
+- `library-backend.py` handles dedicated storage and descriptor-based ACL changes.
+- `permission-monitor.py` repairs completed game updates, excluding support tools.
+- `install-permission-monitor.py` writes root-owned code/configuration and a
+  hardened systemd unit. The monitor checks every 30 seconds, not at every write.
+- `operation-lock.py` serializes administrator and account changes.
+- `transactions.py` journals staged publications and preserves interrupted data.
+- `_common.sh` retains CLI path checks.
+- `repair-proton-fixups.py` is a legacy command; it drops root to the installation
+  owner before restoring modes. Root/service-owned tools must be migrated instead.
 
-Each administrative script validates all important inputs before changing
-state, refuses unsafe symlinked library paths and personal primary Steam
-folders, and stops if Steam could rewrite the same account files. Steam
-configuration changes use unique backups and atomic replacement. The automatic
-storage writer also aborts rather than overwrite a file changed after
-preflight. If a multi-account run stops partway through, its output identifies
-the account in progress and the command can be rerun. Read the individual
-script headers or run a command with `--help` for its exact interface.
+Saved previous selections and journals are private. Diagnostic exports omit them,
+raw VDF and desktop session environment. Backups/quarantine are retained for review.
+See `MANUAL_TEST.md` for final host acceptance, including Adam's tool conflicts.

@@ -170,6 +170,7 @@ def copy_one(item, root, state, replace_conflicts=False):
     if item["operation"] == "conflict" and not replace_conflicts:
         raise ValueError(f"Destination conflict for {item['name']}; choose backup-and-replace explicitly")
     if item["operation"] == "keep verified local copy":
+        make_copy_private(destination)
         return
     staging = Path(tempfile.mkdtemp(prefix=".tool-copy-", dir=common))
     package = staging / "package"

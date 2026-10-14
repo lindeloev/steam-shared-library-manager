@@ -7,7 +7,6 @@ import argparse
 import importlib.util
 import os
 import pwd
-import re
 import secrets
 import stat
 import subprocess
@@ -15,102 +14,34 @@ import uuid
 from pathlib import Path
 
 
-def braced_value(text: str, opening_brace: int) -> tuple[int, int] | None:
-    """Return the body bounds of a VDF object, ignoring braces in strings."""
-    depth = 0
-    quoted = False
-    escaped = False
-    for position in range(opening_brace, len(text)):
-        character = text[position]
-        if quoted:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == '"':
-                quoted = False
-            continue
-        if character == '"':
-            quoted = True
-        elif character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return opening_brace + 1, position
-    return None
+def load_vdf():
+    spec = importlib.util.spec_from_file_location("vdf", Path(__file__).with_name("vdf.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+VDF = load_vdf()
 
 
-def object_bounds(text: str, key: str) -> tuple[int, int] | None:
-    match = re.search(rf'"{re.escape(key)}"\s*\{{', text)
-    if match is None:
-        return None
-    opening = text.find("{", match.start())
-    return braced_value(text, opening)
+def object_bounds(text, key):
+    entry = VDF.object_entry(text, key)
+    return (entry.value_start, entry.value_end) if entry else None
 
 
-def top_level_items(text: str, object_key: str) -> list[tuple[str, str, int, int]]:
-    """Return scalar/object items directly inside one VDF object."""
-    bounds = object_bounds(text, object_key)
-    if bounds is None:
-        return []
-    body_start, body_end = bounds
-    position = body_start
-    items: list[tuple[str, str, int, int]] = []
-    key_pattern = re.compile(r'"((?:\\.|[^"])*)"\s*')
-    while position < body_end:
-        match = key_pattern.search(text, position, body_end)
-        if match is None:
-            break
-        key = match.group(1)
-        value_start = match.end()
-        if value_start >= body_end:
-            break
-        if text[value_start] == "{":
-            result = braced_value(text, value_start)
-            if result is None:
-                break
-            _nested_start, nested_end = result
-            items.append((key, "object", value_start, nested_end + 1))
-            position = nested_end + 1
-        elif text[value_start] == '"':
-            value_end = value_start + 1
-            escaped = False
-            while value_end < body_end:
-                character = text[value_end]
-                if escaped:
-                    escaped = False
-                elif character == "\\":
-                    escaped = True
-                elif character == '"':
-                    break
-                value_end += 1
-            items.append((key, "scalar", value_start + 1, value_end))
-            position = value_end + 1
-        else:
-            position = value_start + 1
-    return items
+def top_level_items(text, key):
+    section = VDF.object_entry(text, key)
+    return [(entry.key, "object" if isinstance(entry.value, list) else "scalar",
+             entry.value_start - 1 if isinstance(entry.value, list) else entry.value_start,
+             entry.value_end + 1 if isinstance(entry.value, list) else entry.value_end)
+            for entry in section.value] if section else []
 
 
-def vdf_unescape(value: str) -> str:
-    return value.replace("\\\\", "\\").replace('\\"', '"')
+def library_indexes(text):
+    return VDF.library_indexes(text)
 
 
-def vdf_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def library_indexes(text: str) -> dict[str, int]:
-    """Map registered library paths to their folder indexes."""
-    result: dict[str, int] = {}
-    for key, kind, value_start, value_end in top_level_items(text, "libraryfolders"):
-        if kind != "object" or not key.isdigit():
-            continue
-        body = text[value_start:value_end]
-        match = re.search(r'"path"\s*"((?:\\.|[^"])*)"', body)
-        if match is not None:
-            result[vdf_unescape(match.group(1))] = int(key)
-    return result
+def vdf_escape(value):
+    return VDF.escape(value)
 
 
 def ensure_library_registered(text: str, library: str, content_id: int) -> tuple[str, int]:
@@ -263,6 +194,8 @@ def prepare_user(
         raise ValueError(f"Steam is still running for {user_name}")
 
     folders_path = safe_file(steam_root, steam_root / "config/libraryfolders.vdf")
+    if not os.access(folders_path.parent, os.W_OK | os.X_OK):
+        raise ValueError("This account cannot update its own Steam library configuration")
     original_folders = read_regular_text(folders_path)
     if library is None:
         folders_text, index = original_folders, 0
@@ -286,6 +219,8 @@ def prepare_user(
     safe_localconfigs = [safe_file(steam_root, path) for path in localconfigs]
     localconfig_updates = []
     for localconfig in safe_localconfigs:
+        if not os.access(localconfig.parent, os.W_OK | os.X_OK):
+            raise ValueError(f"This account cannot update its Steam account configuration: {localconfig}")
         original = read_regular_text(localconfig)
         localconfig_updates.append(
             (localconfig, original, set_default_folder_index(original, 0))

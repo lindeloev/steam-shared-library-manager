@@ -69,3 +69,10 @@ Additional requirements:
   per-account locks prevent concurrent setup writes; staged publications have
   recovery journals and recover on retry; uninstall restores previous mappings
   only where the user still selects a managed tool. Backups and saves retained.
+
+- Step 9 complete: strict VDF backend shared by status and configuration; validated
+  runtime manifest generation/refresh with persistent Steam restart guard; stored
+  prefix locations shared by wrapper/status/uninstall, including legacy prefixes;
+  concrete per-account setup preview, automatic post-action status refresh, fewer
+  success dialogs and private diagnostic export. All six GUI panels and both detail
+  windows rendered on this PC's display with test state; Steam installs unchanged.

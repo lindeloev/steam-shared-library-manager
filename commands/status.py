@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import grp
 import json
 import os
@@ -34,70 +35,45 @@ TOOL_ID = "steam-shared-library-proton"
 PREFIX_ROOT = Path(".local/share") / TOOL_ID
 
 
+def load_backend(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+VDF = load_backend("vdf")
+MANIFEST = load_backend("manifest-helper")
+
+
 def read_text(path: Path) -> str:
     try:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            return ""
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
 
 
 def vdf_value(text: str, key: str) -> str:
-    match = re.search(rf'"{re.escape(key)}"\s*"([^"]*)"', text)
-    return match.group(1) if match else ""
-
-
-def vdf_braced_value(text: str, opening_brace: int) -> tuple[str, int] | None:
-    """Return a brace-delimited VDF value and its closing-brace position."""
-    depth = 0
-    quoted = False
-    escaped = False
-    for position in range(opening_brace, len(text)):
-        character = text[position]
-        if quoted:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == '"':
-                quoted = False
-            continue
-        if character == '"':
-            quoted = True
-        elif character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return text[opening_brace + 1:position], position
-    return None
+    try:
+        return VDF.value(text, key)
+    except ValueError:
+        return ""
 
 
 def vdf_object(text: str, key: str) -> str:
-    match = re.search(rf'"{re.escape(key)}"\s*\{{', text)
-    if match is None:
+    try:
+        entry = VDF.object_entry(text, key)
+        return text[entry.value_start:entry.value_end] if entry else ""
+    except ValueError:
         return ""
-    opening_brace = text.find("{", match.start())
-    result = vdf_braced_value(text, opening_brace)
-    return result[0] if result is not None else ""
 
 
 def compat_tool_mappings(config: Path) -> dict[str, str]:
-    """Return account-wide and per-game compatibility-tool selections."""
-    section = vdf_object(read_text(config / "config.vdf"), "CompatToolMapping")
-    mappings: dict[str, str] = {}
-    position = 0
-    entry_pattern = re.compile(r'"([^"]+)"\s*\{')
-    while match := entry_pattern.search(section, position):
-        opening_brace = section.find("{", match.start())
-        result = vdf_braced_value(section, opening_brace)
-        if result is None:
-            break
-        body, closing_brace = result
-        name = vdf_value(body, "name")
-        if name:
-            mappings[match.group(1)] = name
-        position = closing_brace + 1
-    return mappings
+    try:
+        return {appid: entry["name"] for appid, entry in VDF.mappings(read_text(config / "config.vdf")).items()}
+    except ValueError:
+        return {}
 
 
 def normal_users() -> list[pwd.struct_passwd]:
@@ -171,21 +147,10 @@ def library_registered(config: Path, library: Path) -> bool:
 
 def registered_library_indexes(config: Path) -> dict[str, int]:
     """Return external library paths and their Steam folder indexes."""
-    section = vdf_object(read_text(config / "libraryfolders.vdf"), "libraryfolders")
-    indexes: dict[str, int] = {}
-    position = 0
-    entry_pattern = re.compile(r'"([0-9]+)"\s*\{')
-    while match := entry_pattern.search(section, position):
-        opening_brace = section.find("{", match.start())
-        result = vdf_braced_value(section, opening_brace)
-        if result is None:
-            break
-        body, closing_brace = result
-        path = vdf_value(body, "path").replace("\\\\", "/")
-        if path and match.group(1) != "0":
-            indexes[path] = int(match.group(1))
-        position = closing_brace + 1
-    return indexes
+    try:
+        return VDF.library_indexes(read_text(config / "libraryfolders.vdf"), include_primary=False)
+    except ValueError:
+        return {}
 
 
 def library_is_default(steam_root: Path, config: Path, library: Path) -> bool:
@@ -227,20 +192,10 @@ def local_library_is_default(steam_root: Path) -> bool:
 
 
 def local_default_index(text: str) -> str:
-    section = vdf_object(text, "UserLocalConfigStore")
-    position = 0
-    pattern = re.compile(r'"([^"\\]*)"\s*(\{|"(?:\\.|[^"\\])*")')
-    while match := pattern.search(section, position):
-        if match.group(2) == "{":
-            result = vdf_braced_value(section, match.start(2))
-            if result is None:
-                return ""
-            position = result[1] + 1
-        else:
-            if match.group(1) == "LastInstallFolderIndex":
-                return match.group(2)[1:-1]
-            position = match.end()
-    return ""
+    try:
+        return VDF.scalar(VDF.object_entry(text, "UserLocalConfigStore"), "LastInstallFolderIndex")
+    except ValueError:
+        return ""
 
 
 def is_support_tool(appid: str, name: str, install_dir: str) -> bool:
@@ -338,6 +293,12 @@ def shared_access_report(library: Path, users: list[pwd.struct_passwd], group_na
     members = [user for user in users if group_name in user_groups(user)]
     for user in members:
         for directory in directories:
+            try:
+                named_acl = subprocess.run(["/usr/bin/getfacl", "-cpn", str(directory)], capture_output=True, text=True, check=True).stdout
+                if directory.stat().st_uid != user.pw_uid and f"user:{user.pw_uid}:rwx" not in named_acl:
+                    problems.append(f"{user.pw_name}: direct ACL access missing for {directory}; repair to avoid a logout")
+            except (OSError, subprocess.CalledProcessError):
+                problems.append(f"Cannot inspect named ACL access for {user.pw_name}: {directory}")
             for access in ("-r", "-w", "-x"):
                 try:
                     # Use the POSIX shell builtin, not external coreutils
@@ -355,17 +316,28 @@ def shared_access_report(library: Path, users: list[pwd.struct_passwd], group_na
     return not problems, problems
 
 
-def wrapper_health(root: Path, tool: Path | None, local_protons: list[str]) -> tuple[bool, list[str]]:
+def wrapper_health(root: Path, tool: Path | None, local_protons: list[str], expected_uid=None) -> tuple[bool, list[str]]:
     problems = []
     if tool is None:
         return False, ["Personal wrapper is missing"]
     launcher = tool / "proton"
-    if launcher.is_symlink() or not launcher.is_file() or not os.access(launcher, os.X_OK):
+    expected_uid = root.stat().st_uid if expected_uid is None else expected_uid
+    if (launcher.is_symlink() or not launcher.is_file() or not launcher.stat().st_mode & 0o100
+            or launcher.stat().st_uid != expected_uid):
         problems.append("Wrapper launcher is missing or not executable")
-    base = read_text(tool / "base-proton.conf").removeprefix("BASE_PROTON=").splitlines()[0:1]
-    proton = Path(base[0]) if base else Path("/nonexistent")
+    try:
+        values = MANIFEST.config(read_text(tool / "base-proton.conf"))
+    except ValueError:
+        values = {}
+        problems.append("Invalid wrapper configuration")
+    proton = Path(values.get("BASE_PROTON", "/nonexistent"))
     if str(proton) not in local_protons:
         problems.append("Configured Proton is not installed locally")
+    try:
+        if MANIFEST.restart_pending(tool, tool.stat().st_uid):
+            problems.append("Proton runtime changed; restart Steam before launching")
+    except (OSError, ValueError):
+        problems.append("Cannot verify required Steam restart")
     installed = read_text(tool / "toolmanifest.vdf")
     expected = read_text(proton / "toolmanifest.vdf")
     required = vdf_value(expected, "require_tool_appid")
@@ -409,15 +381,19 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
     prefix_root = safe_existing_descendant(resolved_home, resolved_home / PREFIX_ROOT)
     mappings = compat_tool_mappings(config) if config is not None else {}
     local_protons = available_protons(steam_root) if steam_root is not None else []
-    configured_proton = (
-        read_text(tool_dir / "base-proton.conf").removeprefix("BASE_PROTON=").strip()
-        if tool_dir is not None else ""
-    )
-    healthy, tool_problems = wrapper_health(steam_root, tool_dir, local_protons) if steam_root is not None else (False, ["Steam is not initialized"])
+    try:
+        configured = MANIFEST.config(read_text(tool_dir / "base-proton.conf")) if tool_dir is not None else {}
+    except ValueError:
+        configured = {}
+    configured_proton = configured.get("BASE_PROTON", "")
+    configured_prefix = Path(configured.get("PREFIX_ROOT", str(home / PREFIX_ROOT)))
+    if configured_prefix.is_dir() and not configured_prefix.is_symlink() and configured_prefix.stat().st_uid == user.pw_uid and not configured_prefix.stat().st_mode & 0o077:
+        prefix_root = configured_prefix
+    healthy, tool_problems = wrapper_health(steam_root, tool_dir, local_protons, user.pw_uid) if steam_root is not None else (False, ["Steam is not initialized"])
     managed_tools = {TOOL_ID: healthy}
     if steam_root is not None:
         for variant in (steam_root / "compatibilitytools.d").glob(TOOL_ID + "-proton_*"):
-            managed_tools[variant.name] = wrapper_health(steam_root, variant, local_protons)[0]
+            managed_tools[variant.name] = wrapper_health(steam_root, variant, local_protons, user.pw_uid)[0]
     prefixes: list[str] = []
     launches: list[str] = []
     if prefix_root is not None:
@@ -425,7 +401,14 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
             prefixes = sorted(item.name for item in prefix_root.iterdir() if item.is_dir() and item.name.isdigit())
             for appid in prefixes:
                 marker = read_text(prefix_root / appid / ".manager-last-launch")
-                if "EXIT_CODE=0\n" in marker and f"UID={user.pw_uid}\n" in marker and f"BASE_PROTON={configured_proton}\n" in marker:
+                selected_tool = mappings.get(appid, TOOL_ID)
+                launch_proton = configured_proton
+                if selected_tool.startswith(TOOL_ID + "-proton_") and steam_root is not None:
+                    try:
+                        launch_proton = MANIFEST.config(read_text(steam_root / "compatibilitytools.d" / selected_tool / "base-proton.conf")).get("BASE_PROTON", "")
+                    except ValueError:
+                        launch_proton = ""
+                if "EXIT_CODE=0\n" in marker and f"UID={user.pw_uid}\n" in marker and f"BASE_PROTON={launch_proton}\n" in marker:
                     launches.append(appid)
         except OSError:
             pass
@@ -454,6 +437,8 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         "compat_tool_mappings": mappings,
         "steam_running": steam_is_running(user.pw_name),
         "prefixes": prefixes,
+        "prefix_root": str(configured_prefix),
+        "inspection_complete": os.geteuid() == 0 or os.geteuid() == user.pw_uid,
     }
 
 

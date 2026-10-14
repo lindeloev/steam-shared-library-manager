@@ -150,3 +150,31 @@ def set_mapping(text, appid, name, *, source=None):
 
 def managed(name):
     return name in ("steam-shared-library-proton", "steam-per-user-proton") or name.startswith("steam-shared-library-proton-proton_")
+
+
+def value(text, key):
+    matches = []
+    def visit(entries):
+        for entry in entries:
+            if isinstance(entry.value, list):
+                visit(entry.value)
+            elif entry.key.casefold() == key.casefold():
+                matches.append(entry.value)
+    visit(parse(text))
+    if len(set(matches)) > 1:
+        raise ValueError(f"Ambiguous scalar VDF key: {key}")
+    return matches[0] if matches else ""
+
+
+def library_indexes(text, include_primary=True):
+    section = object_entry(text, "libraryfolders")
+    result = {}
+    if section:
+        for entry in section.value:
+            if entry.key.isdigit() and isinstance(entry.value, list) and (include_primary or entry.key != "0"):
+                path = scalar(entry, "path")
+                if path:
+                    if path in result or int(entry.key) in result.values():
+                        raise ValueError("Duplicate Steam library path/index")
+                    result[path] = int(entry.key)
+    return result
