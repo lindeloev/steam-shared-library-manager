@@ -54,8 +54,8 @@ def beta_selected(root, appid, vdf):
 def public_runtime(root, appid, manifest, migration, vdf):
     if not manifest.runtime_installed(root, appid) or beta_selected(root, appid, vdf):
         return None
-    path = root / f"steamapps/appmanifest_{appid}.acf"
-    text = migration.read_manifest(path)
+    manifest_path = root / f"steamapps/appmanifest_{appid}.acf"
+    text = migration.read_manifest(manifest_path)
     entry = vdf.object_entry(text, "AppState")
     for section in ("UserConfig", "MountedConfig"):
         config = vdf.find(entry.value, section)
@@ -73,7 +73,7 @@ def public_runtime(root, appid, manifest, migration, vdf):
     if not vdf.scalar(entry, "buildid").isdigit():
         return None
     return {"appid": appid, "directory": directory, "source_root": root,
-            "manifest_text": text, "manifest": path, "source": root / "steamapps/common" / directory}
+            "manifest_text": text, "manifest": manifest_path, "source": root / "steamapps/common" / directory}
 
 
 def destination_available(root, item, vdf=None):
@@ -124,8 +124,10 @@ def export_package(fd, item, migration, vdf, manifest):
                         archive.addfile(header, content)
                 else:
                     raise ValueError("Special file in runtime package")
-        if migration.tree_digest(source)[0] != digest or migration.read_manifest(item["manifest"]) != item["manifest_text"]:
-            raise ValueError("Runtime changed during export; no destination was installed")
+        if migration.tree_digest(source)[0] != digest:
+            raise ValueError("Runtime package contents changed during export; no destination was installed")
+        if migration.read_manifest(item["manifest"]) != item["manifest_text"]:
+            raise ValueError("Steam runtime installation manifest changed during export; no destination was installed")
 
 
 def import_package(fd, root, item, migration, vdf, manifest):
