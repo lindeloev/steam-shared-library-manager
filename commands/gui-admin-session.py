@@ -25,6 +25,7 @@ COMMAND_FILES = (
     "_common.sh",
     "account-worker.py",
     "library-backend.py",
+    "vdf.py",
     "add-user.sh",
     "close-steam.sh",
     "configure-steam-storage.py",

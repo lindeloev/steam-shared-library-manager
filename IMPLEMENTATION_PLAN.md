@@ -47,3 +47,8 @@ Additional requirements:
 - Step 4 complete: mixed/native file scans no longer prove launch safety; separate
   configured/recorded-launch states; runtime dependency, manifest freshness, launcher
   permissions and wrapper version verified; Proton exit results recorded privately.
+
+- Step 5 complete: setup selects the personal wrapper automatically; original
+  mappings saved for removal; per-game version migration creates distinct local
+  wrappers and refuses unavailable pinned versions instead of silently substituting.
+  Strict VDF editing preserves unrelated configuration and rejects ambiguity.

@@ -414,6 +414,10 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         if tool_dir is not None else ""
     )
     healthy, tool_problems = wrapper_health(steam_root, tool_dir, local_protons) if steam_root is not None else (False, ["Steam is not initialized"])
+    managed_tools = {TOOL_ID: healthy}
+    if steam_root is not None:
+        for variant in (steam_root / "compatibilitytools.d").glob(TOOL_ID + "-proton_*"):
+            managed_tools[variant.name] = wrapper_health(steam_root, variant, local_protons)[0]
     prefixes: list[str] = []
     launches: list[str] = []
     if prefix_root is not None:
@@ -444,6 +448,7 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         "available_protons": local_protons,
         "tool_installed": healthy,
         "tool_problems": tool_problems,
+        "managed_tools": managed_tools,
         "successful_launches": launches,
         "personal_tool_selected": mappings.get("0") == TOOL_ID,
         "compat_tool_mappings": mappings,
@@ -520,9 +525,9 @@ def game_user_state(user: dict[str, object], appid: str, kind: str) -> str:
         return "unknown"
     override = mappings.get(appid)
     if override:
-        if override != TOOL_ID:
+        if override != TOOL_ID and not override.startswith(TOOL_ID + "-proton_"):
             return "non_personal_override"
-        if not user.get("tool_installed"):
+        if not user.get("managed_tools", {TOOL_ID: user.get("tool_installed")}).get(override):
             return "tool_missing"
         return "launch_recorded" if appid in user.get("successful_launches", []) else "personal_created" if appid in user.get("prefixes", []) else "personal_ready"
 

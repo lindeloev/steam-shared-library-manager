@@ -1146,7 +1146,7 @@ class SharedSteamGui(tk.Tk):
             self.run_admin(
                 "add-user.sh",
                 arguments,
-                "People configured. Each person must log out/in and complete the Steam hand-off steps.",
+                "People configured. Compatibility selections are configured. Refresh status and restart Steam.",
                 5,
                 parent,
                 self.refresh_status,

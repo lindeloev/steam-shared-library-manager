@@ -70,6 +70,22 @@ class AccountWorkerTests(unittest.TestCase):
         self.assertIn('"proton_90"', result)
         self.assertTrue(saves.is_dir())
 
+    def test_setup_selects_wrapper_and_uninstall_restores_previous_default(self):
+        original = '"Steam" { "CompatToolMapping" { "0" { "name" "proton_experimental" } "42" { "name" "proton_90" } } }'
+        self.config.write_text(original)
+        self.worker.install(self.user, self.args, self.storage, self.assets, False)
+        mappings = self.worker.VDF.mappings(self.config.read_text())
+        self.assertEqual(mappings["0"]["name"], self.worker.TOOL_ID)
+        self.assertEqual(mappings["42"]["name"], "proton_90")
+        self.worker.uninstall(self.user, self.args, self.storage, False)
+        self.assertEqual(self.worker.VDF.mappings(self.config.read_text())["0"]["name"], "proton_experimental")
+
+    def test_unavailable_pinned_version_is_not_collapsed_to_default(self):
+        self.config.write_text('"Steam" { "CompatToolMapping" { "42" { "name" "proton_90" } } }')
+        with self.assertRaisesRegex(ValueError, "Pinned proton_90"):
+            self.worker.migrate(self.user, self.args, self.storage, self.assets, False)
+        self.assertEqual(self.worker.VDF.mappings(self.config.read_text())["42"]["name"], "proton_90")
+
     def test_storage_write_refuses_symlinked_parent(self):
         outside = self.home / "outside"
         outside.mkdir()
