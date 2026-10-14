@@ -59,7 +59,14 @@ def recover(root, digest):
         if record.is_symlink() or record.stat().st_size > 1024 * 1024:
             raise ValueError("Unsafe recovery receipt")
         data = json.loads(record.read_text())
-        if data.get("status") != "running" or data.get("kind") not in ("wrapper", "tool-copy"):
+        if data.get("status") != "running" or data.get("kind") not in ("wrapper", "tool-copy", "runtime-import"):
+            continue
+        if data["kind"] == "runtime-import":
+            staged = _path(data["staging"], root / "steamapps/common", ".runtime-import-")
+            if staged.exists():
+                staged.rename(backups / ("abandoned-runtime-" + uuid.uuid4().hex))
+            data.update(status="recovered", detail="Interrupted runtime transfer retained in backups")
+            write(record, data)
             continue
         tool_copy = data["kind"] == "tool-copy"
         parent = root / ("steamapps/common" if tool_copy else "compatibilitytools.d")

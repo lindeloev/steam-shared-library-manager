@@ -30,6 +30,15 @@ Steam download/exit confirmation visible. Do not use a test game with unsynced s
 
 ## Access, mappings, and recovery
 
+- In Step 5, select Adam, Jonas, Marcus and Valdemar. Confirm the preview proposes
+  copying runtime 4183110 from Jonas for accounts missing it. Apply setup, confirm
+  each account becomes ready, then start Steam as Adam and launch a shared game.
+  Check that Steam recognizes the copied runtime and can verify/update it locally.
+- Repeat setup: complete runtimes must be kept. Existing/incomplete packages and
+  beta choices must be preserved with a remaining Steam installation instruction.
+- Confirm runtime `var/` caches are recreated for each account and the source
+  account's runtime remains usable after copying.
+
 - Add a user with an existing desktop session; verify shared access without logout.
 - Apply a game update; verify new/replaced game files remain accessible.
 - Verify explicit per-game Proton versions are preserved during migration.

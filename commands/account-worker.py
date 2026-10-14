@@ -111,6 +111,10 @@ def load_migration():
 
 MIGRATION = load_migration()
 
+spec = importlib.util.spec_from_file_location("runtime_reuse", HERE / "runtime-reuse.py")
+RUNTIME_REUSE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(RUNTIME_REUSE)
+
 
 def describe_setup(user, args, storage):
     root = storage.safe_steam_root(Path(user.pw_dir))
@@ -123,6 +127,9 @@ def describe_setup(user, args, storage):
         runtime = VDF.scalar(VDF.object_entry(source, "manifest"), "require_tool_appid")
         result.update(proton=str(proton), runtime_appid=runtime,
                       runtime_local=MANIFEST.runtime_installed(root, runtime))
+        reuse = getattr(args, "runtime_reuse", {}).get(user.pw_name)
+        if reuse:
+            result["runtime_copy_from"] = reuse["source_user"]
     except (OSError, ValueError) as error:
         result["error"] = str(error)
     print(json.dumps(result))
@@ -206,7 +213,7 @@ def read_asset(path: Path) -> bytes:
         os.close(fd)
 
 
-def local_proton(root: Path, requested: str) -> Path:
+def local_proton(root: Path, requested: str, expected_uid=None) -> Path:
     common = root / "steamapps/common"
     if common.resolve(strict=True) != common:
         raise ValueError("Local steamapps/common must not contain symbolic links")
@@ -217,7 +224,7 @@ def local_proton(root: Path, requested: str) -> Path:
             continue
         launcher = candidate / "proton"
         manifest = candidate / "toolmanifest.vdf"
-        if (not launcher.is_symlink() and launcher.is_file() and launcher.stat().st_uid == os.geteuid() and launcher.stat().st_mode & 0o100
+        if (not launcher.is_symlink() and launcher.is_file() and launcher.stat().st_uid == (os.geteuid() if expected_uid is None else expected_uid) and launcher.stat().st_mode & 0o100
                 and manifest.is_file() and manifest.resolve().is_relative_to(root)):
             return candidate
     raise ValueError(f"Install an official Proton in this person's local library: {root}")
@@ -291,8 +298,15 @@ def install(user, args, storage, assets, dry_run):
     if dry_run:
         if inspect_tool_directory(root, user):
             print(f"{user.pw_name}: compatibility tool container ownership/access will be repaired")
+        reuse = getattr(args, "runtime_reuse", {}).get(user.pw_name)
+        if reuse:
+            print(f"{user.pw_name}: will copy runtime {reuse['appid']} from {reuse['source_user']}'s local library")
         print(f"{user.pw_name}: preflight passed; local Proton: {proton}")
         return
+    reuse = getattr(args, "runtime_reuse", {}).get(user.pw_name)
+    if reuse and getattr(args, "runtime_archive_fd", None) is not None:
+        RUNTIME_REUSE.import_package(args.runtime_archive_fd, root, reuse, MIGRATION, VDF, MANIFEST)
+        print(f"{user.pw_name}: copied and verified local runtime {reuse['appid']} from {reuse['source_user']}")
     safe_directory(root, parent)
     state = safe_directory(root, root / ".steam-shared-library-manager/backups")
     staged = Path(tempfile.mkdtemp(prefix=".manager-stage-", dir=parent))
@@ -446,6 +460,35 @@ def run_as_user(user, operation):
 STORAGE = load_storage()
 
 
+def plan_runtime_reuse(users, requested):
+    """Only fill missing runtimes, matching each person's actual local Proton."""
+    providers = sorted((account for account in pwd.getpwall()
+                        if account.pw_uid >= 1000 and not account.pw_shell.endswith(("nologin", "false"))),
+                       key=lambda account: (account.pw_name not in {user.pw_name for user in users}, account.pw_name))
+    result = {}
+    for user in users:
+        root = STORAGE.safe_steam_root(Path(user.pw_dir))
+        proton = local_proton(root, requested, user.pw_uid)
+        source = MANIFEST.generate(STORAGE.read_regular_text(STORAGE.safe_file(root, proton / "toolmanifest.vdf")))
+        appid = VDF.scalar(VDF.object_entry(source, "manifest"), "require_tool_appid")
+        if not appid or MANIFEST.runtime_installed(root, appid):
+            continue
+        for account in providers:
+            if account.pw_name == user.pw_name:
+                continue
+            try:
+                provider_root = STORAGE.safe_steam_root(Path(account.pw_dir))
+                if provider_root.stat().st_uid != account.pw_uid:
+                    continue
+                item = RUNTIME_REUSE.public_runtime(provider_root, appid, MANIFEST, MIGRATION, VDF)
+                if item and RUNTIME_REUSE.destination_available(root, item, VDF):
+                    result[user.pw_name] = {**item, "source_user": account.pw_name}
+                    break
+            except (OSError, ValueError):
+                continue
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--action", choices=("install", "storage", "uninstall", "migrate", "tools", "plan"), required=True)
@@ -470,6 +513,7 @@ def main():
               "registration": read_asset(HERE.parent / "steam-shared-library-proton.vdf"),
               "manifest-helper": read_asset(HERE / "manifest-helper.py"), "vdf": read_asset(HERE / "vdf.py")}
     users = [pwd.getpwnam(name) for name in args.users]
+    args.runtime_reuse = plan_runtime_reuse(users, args.base_proton) if args.action in ("plan", "install") else {}
     baseline = None
     if args.action == "tools":
         if args.library is None:
@@ -521,6 +565,11 @@ def main():
     for user in users:
         run_as_user(user, lambda: execute(user, True))
     if not args.dry_run:
+        for name in sorted({item["source_user"] for item in args.runtime_reuse.values()}):
+            if subprocess.run(["pgrep", "-u", name, "-x", "steam"], stdout=subprocess.DEVNULL).returncode == 0:
+                result = subprocess.run([str(HERE / "close-steam.sh"), name])
+                if result.returncode:
+                    raise ValueError(f"Could not close Steam for runtime source {name}; no runtime copies were started")
         if args.action in ("install", "migrate"):
             # Validate every container before repairing any. Package and config
             # writes still happen only after dropping to the target identity.
@@ -529,7 +578,22 @@ def main():
             for user in users:
                 inspect_tool_directory(storage.safe_steam_root(Path(user.pw_dir)), user, repair=True)
         for user in users:
-            run_as_user(user, lambda: execute(user, False))
+            reuse = args.runtime_reuse.get(user.pw_name)
+            if reuse:
+                provider = pwd.getpwnam(reuse["source_user"])
+                if subprocess.run(["pgrep", "-u", provider.pw_name, "-x", "steam"], stdout=subprocess.DEVNULL).returncode == 0:
+                    raise ValueError(f"Close Steam for runtime source account {provider.pw_name}, then retry")
+                print(f"{user.pw_name}: transferring runtime {reuse['appid']} from {provider.pw_name}; generated caches are excluded", flush=True)
+                with tempfile.TemporaryFile(dir="/tmp") as transfer:
+                    run_as_user(provider, lambda: RUNTIME_REUSE.export_package(transfer.fileno(), reuse, MIGRATION, VDF, MANIFEST))
+                    transfer.seek(0)
+                    args.runtime_archive_fd = transfer.fileno()
+                    try:
+                        run_as_user(user, lambda: execute(user, False))
+                    finally:
+                        args.runtime_archive_fd = None
+            else:
+                run_as_user(user, lambda: execute(user, False))
         if args.action == "tools":
             for user in users:
                 run_as_user(user, lambda: verify_tools(user, storage, baseline))

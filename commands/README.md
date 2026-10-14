@@ -58,6 +58,11 @@ are never executed as root. Administrator operations and account writes are lock
   hardened systemd unit. The monitor checks every 30 seconds, not at every write.
 - `operation-lock.py` serializes administrator and account changes.
 - `transactions.py` journals staged publications and preserves interrupted data.
+- `runtime-reuse.py` provisions missing matching public runtimes from another
+  account during setup. An anonymous transfer descriptor connects account workers;
+  source reads and destination writes run under their respective accounts. It
+  preserves existing installations and branch choices, verifies package contents,
+  omits generated caches, and journals interrupted imports for recovery.
 - `_common.sh` retains CLI path checks.
 - `repair-proton-fixups.py` is a legacy command; it drops root to the installation
   owner before restoring modes. Root/service-owned tools must be migrated instead.

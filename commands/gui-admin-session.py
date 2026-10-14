@@ -34,6 +34,7 @@ COMMAND_FILES = (
     "permission-monitor.py",
     "install-permission-monitor.py",
     "tool-migration.py",
+    "runtime-reuse.py",
     "migrate-shared-tools.sh",
     "add-user.sh",
     "close-steam.sh",

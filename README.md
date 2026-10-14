@@ -90,6 +90,15 @@ per-game overrides. The administrator can configure other accounts without
 adding their own account to the shared library. Every account must have signed
 in to native Steam at least once; the manager does not handle Steam credentials.
 
+When a required runtime is missing, Step 5 can reuse a complete installation from
+another local account. The preview names the supplying account and matches the
+exact runtime AppID required by each person's Proton. Steam closes for supplying
+accounts too. Copies are verified, made private, and exclude generated `var/`
+caches. Existing packages, incomplete downloads and beta choices are preserved;
+if no suitable copy is available, the manager shows the remaining Steam download
+step. Steam recognition, launch and subsequent updates should be checked during
+the manual acceptance test.
+
 Existing games already in shared storage are recognized and their permissions
 can be repaired. Moving games from a person's private library remains a Steam
 Storage operation; the manager does not silently reorganize private game installs.
