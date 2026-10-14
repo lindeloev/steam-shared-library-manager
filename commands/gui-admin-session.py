@@ -23,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 GROUP = "steamgames"
 COMMAND_FILES = (
     "_common.sh",
+    "account-worker.py",
     "add-user.sh",
     "close-steam.sh",
     "configure-steam-storage.py",

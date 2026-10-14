@@ -10,8 +10,7 @@ import re
 import secrets
 import stat
 import subprocess
-import tempfile
-from datetime import datetime
+import uuid
 from pathlib import Path
 
 
@@ -179,7 +178,7 @@ def read_regular_text(path: Path) -> str:
     """Read one regular file without following a final-component symlink."""
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode) or os.fstat(descriptor).st_size > 16 * 1024 * 1024:
             raise ValueError(f"not a regular Steam configuration file: {path}")
         with os.fdopen(descriptor, "r", encoding="utf-8", errors="strict") as handle:
             descriptor = -1
@@ -195,52 +194,47 @@ def atomic_update(
     text: str,
     user: pwd.struct_passwd,
 ) -> Path | None:
-    current = read_regular_text(path)
-    if current != expected:
-        raise ValueError(f"Steam configuration changed after preflight; refusing to overwrite: {path}")
-    if expected == text:
-        return None
-    path_status = path.lstat()
-    if not stat.S_ISREG(path_status.st_mode):
-        raise ValueError(f"not a regular Steam configuration file: {path}")
-    original_mode = stat.S_IMODE(path_status.st_mode)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_fd, backup_name = tempfile.mkstemp(
-        prefix=path.name + f".steam-shared-library-manager-backup.{timestamp}.",
-        dir=path.parent,
-    )
-    backup = Path(backup_name)
-    with os.fdopen(backup_fd, "w", encoding="utf-8") as handle:
-        handle.write(expected)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chown(backup, user.pw_uid, user.pw_gid)
-    backup.chmod(original_mode)
-
-    temporary_fd, temporary_name = tempfile.mkstemp(
-        prefix=path.name + ".steam-shared-library-manager.",
-        dir=path.parent,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(temporary_fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
+    # Pin the parent directory and use descriptors for metadata. A replaced
+    # parent/symlink cannot redirect metadata operations to unrelated files.
+    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    backup_name = path.name + ".steam-shared-library-manager-backup." + uuid.uuid4().hex
+    temporary_name = path.name + ".steam-shared-library-manager." + uuid.uuid4().hex
+    def current_text():
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 16 * 1024 * 1024:
+                raise ValueError(f"Unsafe Steam configuration: {path}")
+            return handle.read(), info
+    def write_new(name, value, mode):
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory_fd)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchown(handle.fileno(), user.pw_uid, user.pw_gid)
+            os.fchmod(handle.fileno(), mode)
+            handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chown(temporary, user.pw_uid, user.pw_gid)
-        temporary.chmod(original_mode)
-        if read_regular_text(path) != expected:
+    try:
+        current, info = current_text()
+        if current != expected:
+            raise ValueError(f"Steam configuration changed after preflight; refusing to overwrite: {path}")
+        if expected == text:
+            return None
+        mode = stat.S_IMODE(info.st_mode)
+        write_new(backup_name, expected, 0o600)
+        write_new(temporary_name, text, mode)
+        if current_text()[0] != expected:
             raise ValueError(f"Steam configuration changed while updating; refusing to overwrite: {path}")
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        os.replace(temporary_name, path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        return path.parent / backup_name
+    finally:
         try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    return backup
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.close(directory_fd)
 
 
 def prepare_user(
@@ -337,42 +331,13 @@ def main() -> None:
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Run this script with sudo or pkexec.")
-    if args.local_only:
-        try:
-            plans = [prepare_user(name, None) for name in args.users]
-            for plan in plans:
-                apply_user(plan)
-        except (KeyError, OSError, UnicodeError, ValueError) as error:
-            raise SystemExit(str(error)) from error
-        return
-    requested_library = Path(args.library)
-    if (
-        not requested_library.is_absolute()
-        or any(ord(character) < 32 or ord(character) == 127 for character in args.library)
-    ):
-        raise SystemExit(f"Invalid Steam library path: {requested_library}")
-    lexical_library = Path(os.path.abspath(args.library))
-    try:
-        library = requested_library.resolve(strict=True)
-    except OSError as error:
-        raise SystemExit(f"Cannot resolve Steam library {requested_library}: {error}") from error
-    if library != lexical_library:
-        raise SystemExit(f"Refusing symbolic links in library path: {requested_library}")
-    if library == Path("/") or library == Path("/usr") or Path("/usr") in library.parents:
-        raise SystemExit(f"Unsafe Steam library path: {library}")
-    if not (library / "steamapps").is_dir():
-        raise SystemExit(f"Not a Steam library: {library}")
-    plans = []
-    for user_name in args.users:
-        try:
-            plans.append(prepare_user(user_name, library))
-        except (KeyError, OSError, UnicodeError, ValueError) as error:
-            raise SystemExit(f"{user_name}: {error}") from error
-    for plan in plans:
-        try:
-            apply_user(plan)
-        except (OSError, UnicodeError, ValueError) as error:
-            raise SystemExit(f"{plan[0].pw_name}: {error}") from error
+    worker_args = ["/usr/bin/python3", "-I", "-B", str(Path(__file__).with_name("account-worker.py")), "--action", "storage"]
+    if args.library:
+        requested = Path(args.library)
+        if not requested.is_absolute() or requested.resolve() != Path(os.path.abspath(requested)):
+            raise SystemExit("Shared library must be an absolute path without symlinks")
+        worker_args += ["--library", str(requested)]
+    raise SystemExit(subprocess.call([*worker_args, *args.users]))
 
 
 if __name__ == "__main__":
