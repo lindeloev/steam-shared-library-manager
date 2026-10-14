@@ -171,11 +171,44 @@ class StatusTests(unittest.TestCase):
             library = Path(temporary)
             steamapps = library / "steamapps"
             (steamapps / "common/SteamLinuxRuntime_future").mkdir(parents=True)
+            (steamapps / "common/SteamLinuxRuntime_future/runtime").write_text("package")
             (steamapps / "appmanifest_999999.acf").write_text(
                 '"AppState" { "appid" "999999" "name" "Proton 99.0" "installdir" "Proton 99.0" }'
             )
             self.assertEqual(self.status.shared_support_tools(library), ["Proton 99.0", "SteamLinuxRuntime_future"])
             self.assertEqual(self.status.games(library, []), [])
+
+    def test_unregistered_runtime_cache_remnants_do_not_block_migration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary)
+            common = library / "steamapps/common"
+            cache = common / "SteamLinuxRuntime_sniper/var"
+            cache.mkdir(parents=True)
+            (cache / "generated-cache").write_text("cache")
+            (common / "SteamLinuxRuntime_soldier").mkdir()
+            self.assertEqual(self.status.shared_support_tools(library), [])
+            # A manifest still represents a registered installation, even when
+            # its package is missing; a real package also remains detectable.
+            manifest = library / "steamapps/appmanifest_1628350.acf"
+            manifest.write_text('"AppState" { "appid" "1628350" "name" "Steam Linux Runtime 3.0" "installdir" "SteamLinuxRuntime_sniper" }')
+            self.assertEqual(self.status.shared_support_tools(library), ["Steam Linux Runtime 3.0"])
+            manifest.unlink()
+            (cache.parent / "runtime").write_text("package")
+            self.assertEqual(self.status.shared_support_tools(library), ["SteamLinuxRuntime_sniper"])
+
+    def test_runtime_cache_detection_does_not_ignore_links_or_proton_packages(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary)
+            common = library / "steamapps/common"
+            common.mkdir(parents=True)
+            (common / "outside").mkdir()
+            (common / "SteamLinuxRuntime_link").symlink_to(common / "outside")
+            runtime = common / "SteamLinuxRuntime_sniper"
+            runtime.mkdir()
+            (runtime / "var").symlink_to(common / "outside")
+            (common / "Proton Hotfix").mkdir()
+            self.assertEqual(self.status.shared_support_tools(library),
+                             ["Proton Hotfix", "SteamLinuxRuntime_link", "SteamLinuxRuntime_sniper"])
 
     def test_status_reader_does_not_follow_links_or_block_on_fifos(self):
         with tempfile.TemporaryDirectory() as temporary:

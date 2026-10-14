@@ -24,6 +24,9 @@ Steam download/exit confirmation visible. Do not use a test game with unsynced s
   keep both existing installations and resolve through the manager's explicit action.
 - Confirm source copies remain until every selected account's copy verifies.
 - Confirm runtimes without Steam move/install menus can be copied by the manager.
+- After migration, refresh Step 4: unregistered runtime directories containing
+  only var/ caches must not keep it red. Registered or unpackaged actual tool
+  binaries must still be reported as shared tools.
 
 ## Access, mappings, and recovery
 

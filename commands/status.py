@@ -210,6 +210,26 @@ def is_support_tool(appid: str, name: str, install_dir: str) -> bool:
     )
 
 
+def runtime_cache_remnant(path: Path) -> bool:
+    """Recognize unregistered runtime directories containing no package files.
+
+    Steam can leave var/ behind after uninstalling a runtime. Its contents are
+    generated per-user caches, sometimes unreadable by other accounts; inspecting
+    them is unnecessary. Links and unreadable package directories remain flagged.
+    Registered runtimes are always reported by their app manifest separately.
+    """
+    if not path.name.casefold().startswith("steamlinuxruntime"):
+        return False
+    try:
+        if path.is_symlink() or not path.is_dir():
+            return False
+        entries = list(path.iterdir())
+        return not entries or (len(entries) == 1 and entries[0].name == "var"
+                               and not entries[0].is_symlink() and entries[0].is_dir())
+    except OSError:
+        return False
+
+
 def shared_support_tools(library: Path) -> list[str]:
     tools = set()
     for manifest in (library / "steamapps").glob("appmanifest_*.acf"):
@@ -218,12 +238,13 @@ def shared_support_tools(library: Path) -> list[str]:
         install_dir = vdf_value(text, "installdir")
         if is_support_tool(vdf_value(text, "appid"), name, install_dir):
             tools.add(name or install_dir or manifest.stem)
-    # Also detect leftover/unregistered tool directories.
+    # Detect unregistered packages, excluding cache remnants left by Steam.
     common = library / "steamapps/common"
     try:
         tools.update(path.name for path in common.iterdir()
-                     if is_support_tool("", path.name, path.name)
-                     or (path / "toolmanifest.vdf").is_file())
+                     if ((is_support_tool("", path.name, path.name)
+                          and not runtime_cache_remnant(path))
+                         or (path / "toolmanifest.vdf").is_file()))
     except OSError:
         pass
     return sorted(tools)

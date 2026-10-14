@@ -82,3 +82,10 @@ Additional requirements:
   nonblocking no-follow readers, recovery entry validation, ownership checks and
   incomplete-runtime detection. Host GUI rendered without invoking privileged
   actions; final interactive account/migration/service acceptance remains pending.
+
+- Manual test correction: Step 4 counted unregistered runtime directories
+  containing only generated var/ caches as installed shared tools. Status now
+  ignores these remnants while retaining warnings for registered runtimes, actual
+  package files, and symlinks. Verified against this PC: all three remaining
+  runtime directories are cache remnants, no shared tool packages remain, and
+  Jonas has local Experimental and Hotfix. All 18 status regression tests pass.
