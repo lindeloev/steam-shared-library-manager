@@ -71,6 +71,7 @@ for user_name in "$@"; do
 done
 "$script_dir/install.sh" --base-proton "$base_proton" "$@"
 if [ -n "$default_library" ]; then
+    "$script_dir/repair-shared-library.sh" --library "$default_library" --group "$group_name"
     "$script_dir/configure-steam-storage.py" --library "$default_library" "$@"
 fi
-echo "Each listed user must log out of Ubuntu and back in before using the shared library."
+echo "Direct user ACL access is ready. Restart Steam to load the personal wrappers."

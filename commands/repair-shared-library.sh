@@ -7,4 +7,5 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     exit 0
 fi
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-exec /usr/bin/python3 -I -B "$script_dir/library-backend.py" "$@"
+/usr/bin/python3 -I -B "$script_dir/library-backend.py" "$@"
+exec /usr/bin/python3 -I -B "$script_dir/install-permission-monitor.py" "$@"

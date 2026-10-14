@@ -65,6 +65,24 @@ class LibraryBackendTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.backend.validate_library(self.library)
 
+    def test_membership_change_removes_managed_named_acl(self):
+        path = self.library / "steamapps/file"
+        path.write_bytes(b'game')
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            acl = self.backend.ACL()
+            removed_uid = os.getuid() + 123
+            acl.grant(fd, os.getgid(), (removed_uid,))
+            before = acl.lib.acl_get_fd(fd)
+            count = acl.lib.acl_entries(before)
+            acl.lib.acl_free(before)
+            acl.grant(fd, os.getgid(), (), remove_users=(removed_uid,))
+            after = acl.lib.acl_get_fd(fd)
+            self.assertEqual(acl.lib.acl_entries(after), count - 1)
+            acl.lib.acl_free(after)
+        finally:
+            os.close(fd)
+
     def test_access_and_defaults_include_named_user(self):
         self.repair()
         game = self.library / "steamapps/new-game"

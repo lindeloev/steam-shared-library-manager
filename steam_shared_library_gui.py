@@ -225,7 +225,7 @@ class SharedSteamGui(tk.Tk):
         self.detail_window = self.detail_canvas.create_window((0, 0), window=self.step_detail, anchor="nw")
         self.step_detail.bind("<Configure>", lambda _event: self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all")))
         self.detail_canvas.bind("<Configure>", lambda event: self.detail_canvas.itemconfigure(self.detail_window, width=event.width))
-        titles = ["👥  Choose people", "📁  Shared game folder", "↪  Restart session",
+        titles = ["👥  Choose people", "📁  Shared game folder", "✓  Check access",
                   "⬇  Add folder and Proton", "⚙  Set up people", "🏁  Finish and check games"]
         for number, title in enumerate(titles, start=1):
             card = tk.Frame(navigation, highlightthickness=1, highlightbackground="#d1d5db", padx=7, pady=4)
@@ -251,7 +251,7 @@ class SharedSteamGui(tk.Tk):
         headings = {
             1: ("👥  Choose people", "Select the Linux accounts that should use this shared library. The current desktop account is selected by default."),
             2: ("📁  Shared game folder", "Prepare the dedicated folder and grant the selected people shared-library access."),
-            3: ("↪  Restart session", "Sign out of Ubuntu and back in so the selected current account receives its new shared-library group membership."),
+            3: ("✓  Check access", "Check direct access for this desktop session. Setup grants named user ACLs, so a logout is normally unnecessary."),
             4: ("⬇  Add the folder and Proton", "Each selected person installs Proton in their own local Steam library. Shared storage is for games."),
             5: ("⚙  Set up selected people", "Install the personal-settings tool for the people chosen in Step 1."),
             6: ("🏁  Finish and check games", "Confirm every selected person's Steam setup, then review installed games and personal setups."),
@@ -299,8 +299,8 @@ class SharedSteamGui(tk.Tk):
                            "Steam must run as an account with access to the shared folder.")
             elif not self.current_user_configured_in_group():
                 message = ("“" + current + "” has not yet been granted shared-library access. Return to Step 2 and use the folder again; it will offer to grant access.")
-            elif self.current_session_has_group():
-                message = ("Current session: ready. “" + current + "” has steamgames in its effective groups. Continue to Step 4.")
+            elif self.current_user_has_library_access():
+                message = ("Current session: ready. “" + current + "” can access shared storage in this running desktop session. Continue to Step 4.")
             else:
                 message = ("“" + current + "” is configured for shared-library access, but this running desktop session does not have the new group yet. "
                            "Close Steam, then fully restart the user session. If logging out/in leaves this message unchanged, reboot the computer. "
@@ -639,6 +639,12 @@ class SharedSteamGui(tk.Tk):
             return group.gr_gid in os.getgrouplist(user.pw_name, user.pw_gid)
         except KeyError:
             return False
+
+    def current_user_has_library_access(self) -> bool:
+        # Test the actual GUI identity, including named ACLs; group membership
+        # read through runuser does not prove the existing desktop has access.
+        return all(os.access(path, os.R_OK | os.W_OK | os.X_OK)
+                   for path in (Path(self.library.get()), Path(self.library.get()) / "steamapps"))
 
     @staticmethod
     def current_session_has_group() -> bool:
@@ -1048,7 +1054,7 @@ class SharedSteamGui(tk.Tk):
             return
         selected = bool(self.selected_users())
         session_ready = (selected and self.current_user_name() in self.selected_names
-                         and self.current_user_configured_in_group() and self.current_session_has_group())
+                         and self.current_user_has_library_access())
         if not self.status_checked:
             self.set_card(1, "#dcfce7" if selected else "#e5e7eb")
             self.set_card(2, "#fee2e2" if 2 in self.failed_steps else "#e5e7eb")
@@ -1125,7 +1131,7 @@ class SharedSteamGui(tk.Tk):
         people = ", ".join(users) if users else "no people yet"
         if not messagebox.askyesno("Prepare shared folder", "Prepare this missing or empty folder for a shared Steam library:\n\n" + self.library.get() + "\n\nIt will initially include: " + people + ".\n\nNon-empty folders are refused.", parent=parent or self):
             return
-        self.run_admin("setup-shared-library.sh", ["--library", self.library.get(), "--group", GROUP, *users], "Shared folder prepared. Selected people must log out and back in before using it.", 2, parent, self.refresh_status)
+        self.run_admin("setup-shared-library.sh", ["--library", self.library.get(), "--group", GROUP, *users], "Shared folder prepared. Selected people have direct ACL access; logout is normally unnecessary.", 2, parent, self.refresh_status)
 
     def add_users(self, users: list[str] | None = None, parent: tk.Misc | None = None) -> None:
         users = users if users is not None else self.selected_users()

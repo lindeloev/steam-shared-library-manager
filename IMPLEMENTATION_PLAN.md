@@ -58,3 +58,9 @@ Additional requirements:
   runtime UID caches excluded, and recoverable shared quarantine only after all
   selected/registered account copies verify. Added GUI migration and Steam install
   hand-off with completion polling. No host installations have been moved.
+
+- Step 7 complete: named access/default ACLs grant existing sessions immediate
+  access; actual GUI identity checks replace stale group checks. Root-owned monitor
+  code is installed when preparing/repairing a library, repairs completed game
+  updates every 30 seconds, excludes support tools, and reconciles managed ACLs
+  when group membership changes. Service installation awaits the manual host test.

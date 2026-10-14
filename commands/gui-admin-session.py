@@ -26,6 +26,8 @@ COMMAND_FILES = (
     "account-worker.py",
     "library-backend.py",
     "vdf.py",
+    "permission-monitor.py",
+    "install-permission-monitor.py",
     "tool-migration.py",
     "migrate-shared-tools.sh",
     "add-user.sh",

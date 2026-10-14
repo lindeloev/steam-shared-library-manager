@@ -31,12 +31,8 @@ for user_name in "$@"; do if ! getent passwd "$user_name" >/dev/null; then echo 
 if ! command -v setfacl >/dev/null 2>&1; then echo "setfacl is required. Install Ubuntu's 'acl' package first." >&2; exit 1; fi
 if ! getent group "$group_name" >/dev/null; then groupadd -- "$group_name"; fi
 
-# setgid and default ACLs make both existing and future Steam downloads shared.
-install -d -o root -g "$group_name" -m 2775 "$library"
-install -d -o root -g "$group_name" -m 2775 "$library/steamapps"
-setfacl -m "g:$group_name:rwx,m::rwx,d:g:$group_name:rwx,d:m::rwx" "$library"
-setfacl -m "g:$group_name:rwx,m::rwx,d:g:$group_name:rwx,d:m::rwx" "$library/steamapps"
+# Direct user ACLs work immediately in already-running desktop sessions.
+/usr/bin/python3 -I -B "$script_dir/library-backend.py" --setup --library "$library" --group "$group_name" --users "$@"
 for user_name in "$@"; do usermod -a -G "$group_name" "$user_name"; done
-echo "Created shared library: $library"
-if [ "$#" -gt 0 ]; then echo "Users added to $group_name: $*"; echo "Each user must sign out and back in before Steam sees the new group."; else echo "No users were added. Add them later with commands/add-user.sh or the graphical guide."; fi
-echo "Then, in Steam -> Settings -> Storage, add: $library"
+/usr/bin/python3 -I -B "$script_dir/install-permission-monitor.py" --library "$library" --group "$group_name"
+echo "Created shared game storage with immediate access: $library"
