@@ -259,24 +259,12 @@ def library_kind(library: Path) -> str:
 def shared_access_report(library: Path, users: list[pwd.struct_passwd], group_name: str) -> tuple[bool, list[str]]:
     """Check the sharing contract and return concise actionable failures."""
     problems: list[str] = []
-    # Steam's container runtime creates writable state below its ``var``
-    # directory.  Checking only the library root and steamapps makes a library
-    # look healthy even when a download/update has left that directory private
-    # to the account which installed it.  In that case Proton games start and
-    # immediately stop with a fairly opaque pressure-vessel error.
     try:
         group_id = grp.getgrnam(group_name).gr_gid
     except KeyError:
         return False, [f"Shared-library group does not exist: {group_name}"]
 
     directories = [library, library / "steamapps"]
-    common = library / "steamapps" / "common"
-    try:
-        runtime_vars = sorted(path / "var" for path in common.glob("SteamLinuxRuntime*")
-                              if path.is_dir() and (path / "var").is_dir())
-    except OSError:
-        runtime_vars = []
-    directories.extend(runtime_vars)
     try:
         for directory in directories:
             status = directory.stat()
