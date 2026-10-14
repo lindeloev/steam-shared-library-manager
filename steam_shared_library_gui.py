@@ -359,7 +359,7 @@ class SharedSteamGui(tk.Tk):
                     ("group", "Shared group"),
                     ("steam", "Steam"),
                     ("tool", "Wrapper"),
-                    ("storage", "Default storage"),
+                    ("storage", "Install preference"),
                 ):
                     table.heading(column, text=heading)
                     table.column(column, anchor="center", width=115)
@@ -395,7 +395,7 @@ class SharedSteamGui(tk.Tk):
                           foreground="#991b1b", wraplength=590).pack(anchor="w", pady=(0, 10))
             ttk.Label(
                 content,
-                text="Setup registers shared games and makes local storage the default. Automatic Proton and runtime downloads use local storage. "
+                text="Setup registers shared games and makes local storage the default. Steam may change this preference; the manager checks actual tool locations. "
                      "Choose the shared folder when installing games. Steam configuration changes are backed up.",
                 foreground="#555555",
                 wraplength=590,
@@ -423,7 +423,7 @@ class SharedSteamGui(tk.Tk):
                 for column, heading, width in (
                     ("person", "Person", 120),
                     ("storage", "Shared folder", 105),
-                    ("default", "Default storage", 110),
+                    ("default", "Install preference", 110),
                     ("wrapper", "Wrapper", 105),
                     ("status", "Next action", 190),
                 ):

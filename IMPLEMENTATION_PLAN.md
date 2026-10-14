@@ -38,3 +38,8 @@ Additional requirements:
 - Step 2 complete: dedicated-library validation; descriptor-based recursive repair;
   protected/private paths, external symlinks, special files and hardlinks refused;
   legacy Proton permission restore drops root before mutation.
+
+- Step 3 complete: read-only host baseline found Jonas's remembered destination
+  currently shared, plus shared Hotfix and three runtimes. Steam is running.
+  Added location audit/comparison and MANUAL_TEST.md; removed guaranteed-placement
+  claims. Actual download placement remains an explicit final acceptance check.

@@ -67,8 +67,10 @@ The manager guides you through six steps:
    game folder, and keep each local library as the default for tools.
 6. Finish the remaining account-specific Steam setting and check game status.
 
-The manager makes each person's primary local library the default, so automatic
-Proton and Steam Linux Runtime downloads use local storage. When installing a
+The manager selects each person's primary local library as Steam's remembered
+install destination. Dependency placement also depends on Steam's own install
+flow; this preference is not a guarantee that every automatic download stays
+local. When installing a
 game, choose the shared folder (for example `/srv/SteamLibrary`) in **Install To**.
 Steam has a single install default, so this also means new games initially offer
 local storage. Keep local storage as default even after installing a shared game.
