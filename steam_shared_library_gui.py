@@ -237,6 +237,9 @@ class SharedSteamGui(tk.Tk):
         self.log.tag_configure("success", foreground="#86efac")
         self.log.tag_configure("error", foreground="#fca5a5")
         self.log.tag_configure("muted", foreground="#9ca3af")
+        self.log.configure(exportselection=False)
+        self.log.bind("<Control-a>", self.select_log)
+        self.log.bind("<Control-A>", self.select_log)
         self.log.pack(side="left", fill="x", expand=True)
         if self.running_in_bubblewrap():
             warning = ("This manager is running inside a Bubblewrap sandbox. Its permission checks may not match Steam on the host. "
@@ -705,12 +708,18 @@ class SharedSteamGui(tk.Tk):
 
     def log_message(self, message: str, level: str = "info") -> None:
         self.append_diagnostic(message)
+        follow = self.log.yview()[1] >= 0.999 and not self.log.tag_ranges("sel")
         self.log.configure(state="normal")
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log.insert("end", timestamp + "  ", "muted")
         self.log.insert("end", message.rstrip() + "\n", level)
-        self.log.see("end")
+        if follow:
+            self.log.see("end")
         self.log.configure(state="disabled")
+
+    def select_log(self, _event=None) -> str:
+        self.log.tag_add("sel", "1.0", "end-1c")
+        return "break"
 
     def clear_log(self) -> None:
         """Clear only the visible panel; the private diagnostic log remains."""
