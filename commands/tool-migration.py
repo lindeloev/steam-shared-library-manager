@@ -1,6 +1,7 @@
 """Copy Steam support tools as the destination account; retain recoverable sources."""
 from __future__ import annotations
 import hashlib
+import importlib.util
 import json
 import os
 import errno
@@ -10,6 +11,15 @@ import stat
 import tempfile
 import uuid
 from pathlib import Path
+
+
+def load_transactions():
+    spec = importlib.util.spec_from_file_location("transactions", Path(__file__).with_name("transactions.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+TRANSACTIONS = load_transactions()
 
 
 def tree_digest(root: Path):
@@ -164,6 +174,9 @@ def copy_one(item, root, state, replace_conflicts=False):
     staging = Path(tempfile.mkdtemp(prefix=".tool-copy-", dir=common))
     package = staging / "package"
     backup = state / ("tool-" + uuid.uuid4().hex)
+    receipt = TRANSACTIONS.start(root, "tool-copy", {"destination": str(destination), "manifest": str(manifest),
+                "staging": str(staging), "backup": str(backup), "digest": item["digest"],
+                "manifest_digest": hashlib.sha256(item["manifest_text"].encode()).hexdigest()})
     moved = False
     published = False
     try:
@@ -191,7 +204,8 @@ def copy_one(item, root, state, replace_conflicts=False):
         package.rename(destination)
         published = True
         staged_manifest.rename(manifest)
-    except BaseException:
+        TRANSACTIONS.finish(receipt, "complete")
+    except BaseException as error:
         if published and destination.exists():
             # Retain the new package as a failed-stage backup rather than delete.
             failed = state / ("failed-tool-" + uuid.uuid4().hex)
@@ -201,6 +215,7 @@ def copy_one(item, root, state, replace_conflicts=False):
                 (backup / "package").rename(destination)
             if (backup / "manifest.acf").exists():
                 (backup / "manifest.acf").rename(manifest)
+        TRANSACTIONS.finish(receipt, "failed", str(error))
         raise
     finally:
         shutil.rmtree(staging)

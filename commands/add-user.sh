@@ -1,6 +1,11 @@
 #!/bin/sh
 # Add existing Linux accounts to an already-created shared Steam library.
 set -eu
+if [ -z "${SSLM_LOCK_FD:-}" ]; then
+    lock_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+    exec /usr/bin/python3 -I -B "$lock_dir/operation-lock.py" "$0" "$@"
+fi
+
 usage() { cat <<'EOF'
 Usage: add-user.sh [--close-steam] [--default-library PATH] --group GROUP --base-proton PATH USER [USER ...]
 

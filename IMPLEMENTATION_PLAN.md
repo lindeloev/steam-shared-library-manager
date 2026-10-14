@@ -64,3 +64,8 @@ Additional requirements:
   code is installed when preparing/repairing a library, repairs completed game
   updates every 30 seconds, excludes support tools, and reconciles managed ACLs
   when group membership changes. Service installation awaits the manual host test.
+
+- Step 8 complete: GUI/CLI administrator changes serialize with the monitor;
+  per-account locks prevent concurrent setup writes; staged publications have
+  recovery journals and recover on retry; uninstall restores previous mappings
+  only where the user still selects a managed tool. Backups and saves retained.

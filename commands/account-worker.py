@@ -24,6 +24,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TOOL_ID = "steam-shared-library-proton"
 
+def load_lock():
+    spec = importlib.util.spec_from_file_location("operation_lock", HERE / "operation-lock.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+LOCK = load_lock()
+
+
 
 def load_storage():
     spec = importlib.util.spec_from_file_location("storage", HERE / "configure-steam-storage.py")
@@ -133,6 +142,15 @@ def verify_tools(user, storage, baseline):
     print(f"{user.pw_name}: all local tool copies verified")
 
 
+def load_transactions():
+    spec = importlib.util.spec_from_file_location("transactions", HERE / "transactions.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+TRANSACTIONS = load_transactions()
+
+
 def read_asset(path: Path) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -195,6 +213,7 @@ def install(user, args, storage, assets, dry_run):
     state = safe_directory(root, root / ".steam-shared-library-manager/backups")
     staged = Path(tempfile.mkdtemp(prefix=".manager-stage-", dir=parent))
     backup = state / f"wrapper-{uuid.uuid4().hex}"
+    receipt = TRANSACTIONS.start(root, "wrapper", {"destination": str(tool), "staging": str(staged), "backup": str(backup)})
     swapped = False
     try:
         contents = {"proton": assets["proton"], "compatibilitytool.vdf": assets["registration"].replace(TOOL_ID.encode(), tool_id.encode()),
@@ -215,7 +234,11 @@ def install(user, args, storage, assets, dry_run):
             raise
         if tool_id == TOOL_ID:
             apply_mappings(user, root, {"0": TOOL_ID}, storage)
+        TRANSACTIONS.finish(receipt, "complete")
         print(f"{user.pw_name}: installed local Proton wrapper; previous wrapper: {backup if backup.exists() else 'none'}")
+    except BaseException as error:
+        TRANSACTIONS.finish(receipt, "failed", str(error))
+        raise
     finally:
         if not swapped and staged.exists():
             shutil.rmtree(staged)
@@ -303,7 +326,12 @@ def run_as_user(user, operation):
                               PATH="/usr/bin:/bin", LANG="C.UTF-8")
             os.chdir(user.pw_dir)
             os.umask(0o077)
-            operation()
+            # Modules are already loaded before dropping root; no reads of the
+            # root-private helper checkout are needed under the account identity.
+            root = STORAGE.safe_steam_root(Path(user.pw_dir))
+            state = safe_directory(root, root / ".steam-shared-library-manager")
+            with LOCK.account_lock(state / "operation.lock"):
+                operation()
         except (OSError, ValueError, KeyError) as error:
             print(f"{user.pw_name}: {error}", file=sys.stderr)
             sys.stdout.flush()
@@ -317,6 +345,9 @@ def run_as_user(user, operation):
         raise ValueError(f"Stopped for {user.pw_name}; earlier accounts may be complete. Safely rerun after correcting the error.")
 
 
+STORAGE = load_storage()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--action", choices=("install", "storage", "uninstall", "migrate", "tools"), required=True)
@@ -328,7 +359,7 @@ def main():
     parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("users", nargs="+")
     args = parser.parse_args()
-    storage = load_storage()
+    storage = STORAGE
     if args.library is not None:
         spec = importlib.util.spec_from_file_location("library_backend", HERE / "library-backend.py")
         library_backend = importlib.util.module_from_spec(spec)
@@ -357,6 +388,19 @@ def main():
                     raise ValueError(f"{account.pw_name} also uses this library; include them before removing shared tools")
         baseline = MIGRATION.sources(args.library, VDF)
     def execute(user, dry):
+        root = storage.safe_steam_root(Path(user.pw_dir))
+        if not dry:
+            TRANSACTIONS.recover(root, MIGRATION.tree_digest)
+        receipt = TRANSACTIONS.start(root, "account-" + args.action, {"account": user.pw_name}) if not dry else None
+        try:
+            execute_action(user, dry)
+            if receipt:
+                TRANSACTIONS.finish(receipt, "complete")
+        except BaseException as error:
+            if receipt:
+                TRANSACTIONS.finish(receipt, "failed", str(error))
+            raise
+    def execute_action(user, dry):
         if args.action == "tools":
             migrate_tools(user, args, storage, dry)
         elif args.action == "install":
@@ -384,6 +428,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        with LOCK.admin_lock():
+            main()
     except (OSError, ValueError, KeyError) as error:
         raise SystemExit(str(error)) from error

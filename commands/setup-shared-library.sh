@@ -1,6 +1,11 @@
 #!/bin/sh
 # Create the filesystem part of a shared Steam library.
 set -eu
+if [ -z "${SSLM_LOCK_FD:-}" ]; then
+    lock_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+    exec /usr/bin/python3 -I -B "$lock_dir/operation-lock.py" "$0" "$@"
+fi
+
 usage() { cat <<'EOF'
 Usage: setup-shared-library.sh --library PATH --group GROUP [USER ...]
 

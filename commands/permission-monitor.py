@@ -26,6 +26,7 @@ def load(name):
 
 BACKEND = load("library-backend")
 VDF = load("vdf")
+LOCK = load("operation-lock")
 CONFIG = Path("/etc/steam-shared-library-manager/libraries.json")
 
 
@@ -114,7 +115,8 @@ def main():
             for item in config.get("libraries", []):
                 try:
                     previous = memberships.get(item["path"], item.get("managed_users"))
-                    reconcile(item["path"], item["group"], known, previous)
+                    with LOCK.admin_lock():
+                        reconcile(item["path"], item["group"], known, previous)
                     memberships[item["path"]] = list(normal_group_users(item["group"])[1])
                 except (OSError, ValueError, KeyError) as error:
                     print(f"Permission monitor: {item.get('path')}: {error}", flush=True)

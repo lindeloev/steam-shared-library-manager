@@ -9,6 +9,7 @@ or button press.  Only the small, fixed command set below can be dispatched.
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import pwd
 import signal
@@ -26,6 +27,8 @@ COMMAND_FILES = (
     "account-worker.py",
     "library-backend.py",
     "vdf.py",
+    "operation-lock.py",
+    "transactions.py",
     "permission-monitor.py",
     "install-permission-monitor.py",
     "tool-migration.py",
@@ -197,6 +200,16 @@ def snapshot_project(destination_root: Path) -> Path:
     return commands
 
 
+SESSION_LOCK = None
+
+
+def load_lock(directory=HERE):
+    spec = importlib.util.spec_from_file_location("operation_lock", directory / "operation-lock.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run_invocation(invocation: list[str], timeout: float = 10 * 60) -> tuple[int, str]:
     """Run one command and terminate its complete process group on timeout."""
     process = subprocess.Popen(
@@ -205,6 +218,7 @@ def run_invocation(invocation: list[str], timeout: float = 10 * 60) -> tuple[int
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        pass_fds=(SESSION_LOCK or load_lock()).inherited_fds(),
     )
     try:
         output, _stderr = process.communicate(timeout=timeout)
@@ -226,6 +240,7 @@ def run_invocation(invocation: list[str], timeout: float = 10 * 60) -> tuple[int
 
 
 def main() -> None:
+    global SESSION_LOCK
     if os.geteuid() != 0:
         raise SystemExit("This helper must be started through pkexec.")
     with tempfile.TemporaryDirectory(prefix="steam-shared-library-manager-") as temporary:
@@ -233,6 +248,7 @@ def main() -> None:
             runtime_commands = snapshot_project(Path(temporary))
         except OSError as error:
             raise SystemExit(f"Could not prepare a private command snapshot: {error}") from error
+        SESSION_LOCK = load_lock(runtime_commands)
         # The GUI closes this pipe when its window closes; EOF ends the session.
         while True:
             line = sys.stdin.readline()
@@ -252,9 +268,14 @@ def main() -> None:
             else:
                 invocation = [str(executable), *arguments]
             try:
-                code, output = run_invocation(invocation)
+                lock = SESSION_LOCK
+                if command == "status.py" or "--dry-run" in arguments:
+                    code, output = run_invocation(invocation)
+                else:
+                    with lock.admin_lock():
+                        code, output = run_invocation(invocation)
                 respond({"code": code, "output": output})
-            except OSError as error:
+            except (OSError, ValueError) as error:
                 respond({"code": 127, "output": str(error)})
 
 

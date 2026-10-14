@@ -54,7 +54,7 @@ def main():
     previous = next((item.get("managed_users", []) for item in config["libraries"] if item["path"] == str(library)), [])
     managed_users = sorted(set(previous) | set(backend.group_users(__import__('grp').getgrnam(args.group).gr_gid)))
     config["libraries"] = [item for item in config["libraries"] if item["path"] != str(library)] + [{"path": str(library), "group": args.group, "managed_users": managed_users}]
-    for name in ("permission-monitor.py", "library-backend.py", "vdf.py"):
+    for name in ("permission-monitor.py", "library-backend.py", "vdf.py", "operation-lock.py"):
         if (HERE / name).is_symlink():
             raise ValueError("Refusing symlinked monitor source")
         atomic_root_file(program_dir / name, (HERE / name).read_bytes(), 0o700)

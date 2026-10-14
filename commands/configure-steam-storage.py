@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import pwd
 import re
@@ -337,7 +338,10 @@ def main() -> None:
         if not requested.is_absolute() or requested.resolve() != Path(os.path.abspath(requested)):
             raise SystemExit("Shared library must be an absolute path without symlinks")
         worker_args += ["--library", str(requested)]
-    raise SystemExit(subprocess.call([*worker_args, *args.users]))
+    spec = importlib.util.spec_from_file_location("operation_lock", Path(__file__).with_name("operation-lock.py"))
+    lock = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lock)
+    raise SystemExit(subprocess.call([*worker_args, *args.users], pass_fds=lock.inherited_fds()))
 
 
 if __name__ == "__main__":

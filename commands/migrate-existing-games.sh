@@ -1,6 +1,11 @@
 #!/bin/sh
 # Preserve explicit Proton versions using corresponding personal wrappers.
 set -eu
+if [ -z "${SSLM_LOCK_FD:-}" ]; then
+    lock_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+    exec /usr/bin/python3 -I -B "$lock_dir/operation-lock.py" "$0" "$@"
+fi
+
 case "${1:-}" in
     --help|-h) echo 'Usage: migrate-existing-games.sh --dry-run|--apply USER [USER ...]'; exit 0 ;;
     --dry-run) mode=--dry-run ;;
