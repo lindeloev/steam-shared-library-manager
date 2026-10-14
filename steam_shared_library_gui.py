@@ -58,6 +58,54 @@ class SharedSteamGui(tk.Tk):
     def default_library() -> str:
         return default_shared_library(Path.home())
 
+    def confirm_change(self, title: str, description: str, details: str,
+                       action: str, parent: tk.Misc | None = None) -> bool:
+        """Present the purpose first, with selectable, scrollable change details."""
+        parent = parent or self
+        window = tk.Toplevel(parent)
+        window.title(title)
+        window.transient(parent)
+        width = min(820, max(400, self.winfo_screenwidth() - 80))
+        height = min(560, max(350, self.winfo_screenheight() - 100))
+        window.geometry(f"{width}x{height}")
+        window.minsize(min(560, width), min(380, height))
+        frame = ttk.Frame(window, padding=18)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=title, font=("TkDefaultFont", 13, "bold")).pack(anchor="w")
+        summary = ttk.Label(frame, text=description, justify="left", wraplength=width - 40)
+        summary.pack(fill="x", pady=(10, 18))
+        frame.bind("<Configure>", lambda event: summary.configure(wraplength=max(200, event.width - 36)))
+        ttk.Label(frame, text="Change details", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 6))
+        detail_frame = ttk.Frame(frame)
+        detail_frame.pack(fill="both", expand=True)
+        text = tk.Text(detail_frame, wrap="word", height=12, width=70,
+                       font="TkDefaultFont", padx=10, pady=10)
+        scrollbar = ttk.Scrollbar(detail_frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        text.insert("1.0", details)
+        text.configure(state="disabled")
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x", pady=(16, 0))
+        accepted = False
+
+        def finish(proceed: bool = False) -> None:
+            nonlocal accepted
+            accepted = proceed
+            window.destroy()
+
+        ttk.Button(buttons, text=action, command=lambda: finish(True)).pack(side="right")
+        cancel = ttk.Button(buttons, text="Cancel", command=finish)
+        cancel.pack(side="right", padx=(0, 10))
+        window.protocol("WM_DELETE_WINDOW", finish)
+        window.bind("<Escape>", lambda _event: finish())
+        window.wait_visibility()
+        window.grab_set()
+        cancel.focus_set()
+        window.wait_window()
+        return accepted
+
     @staticmethod
     def state_path() -> Path:
         config_home = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
@@ -867,7 +915,7 @@ class SharedSteamGui(tk.Tk):
         text = ("This is an existing Steam library, but its shared Linux access needs repair. Close Steam for all users first.\n\n"
                 "Repair group ownership and named user ACLs in this dedicated game library. Enable automatic permission repair for completed game updates:\n\n"
                 + path + "\n\nThis does not delete or download games, and it will not follow links outside this library.")
-        if not messagebox.askyesno("Repair shared access", text, parent=self):
+        if not self.confirm_change("Repair shared access", "Let the selected people use the shared games, and keep access working after game updates. Existing games stay in place.", text, "Repair access"):
             return
 
         def repair() -> None:
@@ -886,7 +934,7 @@ class SharedSteamGui(tk.Tk):
         close_text = ("Steam is currently running for: " + ", ".join(running)
                       + ".\n\nClose those native Steam clients now, then repair shared access? "
                         "Steam will be asked to shut down cleanly; the repair will not run if one remains open.")
-        if messagebox.askyesno("Close Steam before repair", close_text, parent=self):
+        if self.confirm_change("Close Steam before repair", "Steam needs to close before the shared folder can be repaired. Ask anyone using these accounts to finish playing first.", close_text, "Close Steam and repair"):
             self.run_admin("close-steam.sh", running,
                            "Steam was closed. Repairing shared-library access now.", 2,
                            after_success=repair)
@@ -899,7 +947,7 @@ class SharedSteamGui(tk.Tk):
             text = ("The selected people do not yet have access to this shared folder:\n\n"
                     + ", ".join(missing)
                     + "\n\nGrant them access now? Named user ACLs give existing sessions immediate access.")
-            if messagebox.askyesno("Grant shared-library access", text, parent=self):
+            if self.confirm_change("Grant shared-library access", "Allow these people to use the shared game folder. Their current login sessions will normally gain access immediately.", text, "Grant access"):
                 self.run_admin("grant-library-users.sh", ["--group", GROUP, "--library", self.library.get(), *missing],
                                "Direct shared-library access granted. Continue with the access check.", 2,
                                after_success=lambda: self.refresh_status(after=self.offer_shared_access_repair))
@@ -1115,7 +1163,7 @@ class SharedSteamGui(tk.Tk):
             messagebox.showwarning("Select people first", "Choose at least one person in Step 1 before preparing a new shared folder.", parent=parent or self)
             return
         people = ", ".join(users) if users else "no people yet"
-        if not messagebox.askyesno("Prepare shared folder", "Prepare this missing or empty folder for a shared Steam library:\n\n" + self.library.get() + "\n\nIt will initially include: " + people + ".\n\nNon-empty folders are refused.", parent=parent or self):
+        if not self.confirm_change("Prepare shared folder", "Create a place for everyone selected to share installed games. Each person's Steam tools and game settings will stay in their own account.", "Folder: " + self.library.get() + "\n\nPeople: " + people + "\n\nCreates the library folders and grants shared access. Enables automatic access repair after game updates. The folder must be missing or empty.", "Prepare folder", parent):
             return
         self.run_admin("setup-shared-library.sh", ["--library", self.library.get(), "--group", GROUP, *users], "Shared folder prepared. Selected people have direct ACL access; logout is normally unnecessary.", 2, parent, self.refresh_status)
 
@@ -1148,8 +1196,8 @@ class SharedSteamGui(tk.Tk):
             details = "\n\n".join(plan["account"] + "\nProton: " + plan.get("proton", "missing")
                                     + "\nRuntime: " + (plan.get("runtime_appid") or "none required") + (" (local)" if plan.get("runtime_local") else " (needs local installation)")
                                     + "\nPersonal settings: " + plan["prefix_root"] for plan in plans)
-            text = details + "\n\nRegister shared games, select local install preferences, install personal wrappers, and select them automatically? Per-game overrides are preserved. Steam closes first; changed settings and previous wrappers are backed up. Game-update permission monitoring will be enabled."
-            if not messagebox.askyesno("Review account setup", text, parent=parent or self):
+            text = "People: " + ", ".join(users) + "\n\nRegister shared games, select local install preferences, install personal wrappers, and select them automatically. Per-game overrides are preserved. Steam closes first; changed settings and previous wrappers are backed up. Game-update permission monitoring will be enabled.\n\n" + details
+            if not self.confirm_change("Review account setup", "Set up each person's Steam account to use shared games with their own private settings. Steam will close during setup; start it again when setup finishes.", text, "Set up accounts", parent):
                 return
             self.run_admin("add-user.sh", ["--close-steam", "--default-library", self.library.get(), "--group", GROUP, "--base-proton", proton, *users],
                            "Accounts configured. Restart Steam to load their personal wrappers.", 5, parent, self.refresh_status)
@@ -1178,7 +1226,7 @@ class SharedSteamGui(tk.Tk):
             if code != 0:
                 messagebox.showerror("Migration preview failed", output, parent=self)
                 return
-            if not messagebox.askyesno("Migrate tools to local libraries", output + "\n\nCopy and verify these tools for all listed accounts? Different local copies are backed up before replacement. Shared copies are quarantined only after every account verifies. Steam will be closed first.", parent=self):
+            if not self.confirm_change("Migrate tools to local libraries", "Give each person their own copy of Proton and Steam's Linux runtimes. This avoids problems caused by sharing these tools. Steam will close before copying starts.", "Different local copies are backed up before replacement. Shared copies are moved to a recovery folder only after every account's local copy has been verified.\n\n" + output, "Migrate tools"):
                 return
             self.run_admin("close-steam.sh", users, "Steam closed; copying tools locally.", after_success=lambda: self.run_admin(
                 "migrate-shared-tools.sh", ["--replace-conflicts", "--cleanup", "--library", self.library.get(), *users],
@@ -1216,7 +1264,7 @@ class SharedSteamGui(tk.Tk):
         text = ("Steam did not respond to its normal exit request for: " + ", ".join(users) + ".\n\n"
                 "Send SIGTERM to Steam's main process? This can interrupt an active download or game, but does not use SIGKILL. "
                 "Only use this after checking that nobody is playing.")
-        if messagebox.askyesno("Force stop Steam", text, parent=parent or self):
+        if self.confirm_change("Force stop Steam", "Stop Steam when it does not respond to the normal close request. This can interrupt a game or download, so check that nobody is playing first.", text, "Stop Steam", parent):
             self.run_admin("close-steam.sh", ["--force", *users],
                            "Steam was stopped. The status will now be refreshed.",
                            parent=parent, after_success=self.refresh_status)
@@ -1226,7 +1274,7 @@ class SharedSteamGui(tk.Tk):
         if not users:
             messagebox.showwarning("Select people", "Select one or more people in Step 1 first.", parent=parent or self)
             return
-        if messagebox.askyesno("Migrate mappings", "Convert existing explicit official-Proton selections for: " + ", ".join(users) + "?\n\nSteam must be closed. A backup is created first.", parent=parent or self):
+        if self.confirm_change("Update existing game settings", "Update games that already have a specific Proton version selected so they use private settings in each person's account. Their selected Proton versions are preserved.", "People: " + ", ".join(users) + "\n\nConverts explicit official-Proton mappings to personal wrappers for the corresponding local version. Missing local versions must be installed first. Steam must be closed. A backup is created before changing settings.", "Update game settings", parent):
             self.run_admin("migrate-existing-games.sh", ["--apply", *users], "Existing explicit Proton mappings were processed.", parent=parent)
 
 
