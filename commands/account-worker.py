@@ -117,6 +117,7 @@ def describe_setup(user, args, storage):
     result = {"account": user.pw_name, "local_root": str(root), "shared_library": str(args.library),
               "prefix_root": str(choose_prefix(user, root, args)), "changes": ["Register shared game storage", "Select local remembered install destination", "Install personal wrapper", "Select wrapper by default; preserve per-game overrides"]}
     try:
+        result["tool_directory_repair"] = inspect_tool_directory(root, user)
         proton = local_proton(root, args.base_proton)
         source = MANIFEST.generate(storage.read_regular_text(storage.safe_file(root, proton / "toolmanifest.vdf")))
         runtime = VDF.scalar(VDF.object_entry(source, "manifest"), "require_tool_appid")
@@ -235,6 +236,43 @@ def safe_directory(root: Path, path: Path) -> Path:
     return path
 
 
+def inspect_tool_directory(root, user, repair=False):
+    """Repair only the root-owned container left by older privileged installs.
+
+    Pin every directory with no-follow opens. Never recursively change ownership
+    of account files or third-party compatibility tools.
+    """
+    if user.pw_uid < 1000:
+        raise ValueError("Compatibility tools require a normal login account")
+    flags = (os.O_RDONLY if repair else os.O_PATH) | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open("/", flags)
+    try:
+        for part in root.relative_to("/").parts:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        if os.fstat(fd).st_uid != user.pw_uid:
+            raise ValueError(f"Steam directory must belong to {user.pw_name}: {root}")
+        try:
+            child = os.open("compatibilitytools.d", flags, dir_fd=fd)
+        except FileNotFoundError:
+            return False
+        os.close(fd)
+        fd = child
+        info = os.fstat(fd)
+        if info.st_uid not in (0, user.pw_uid):
+            raise ValueError(f"Compatibility tool directory belongs to another account: {root / 'compatibilitytools.d'}")
+        needed = info.st_uid == 0 or info.st_mode & 0o700 != 0o700
+        if repair and needed:
+            if info.st_uid == 0:
+                os.fchown(fd, user.pw_uid, user.pw_gid)
+            os.fchmod(fd, stat.S_IMODE(info.st_mode) | 0o700)
+            print(f"{user.pw_name}: repaired compatibility tool container ownership/access (contents unchanged)")
+        return needed
+    finally:
+        os.close(fd)
+
+
 def install(user, args, storage, assets, dry_run):
     plan = storage.prepare_user(user.pw_name, None)
     root = storage.safe_steam_root(Path(user.pw_dir))
@@ -248,9 +286,11 @@ def install(user, args, storage, assets, dry_run):
     tool = parent / tool_id
     if tool_id == TOOL_ID:
         apply_mappings(user, root, {"0": TOOL_ID}, storage, dry_run=True)
-    if tool.is_symlink():
+    if os.access(parent, os.X_OK) and tool.is_symlink():
         raise ValueError(f"Refusing symlinked tool: {tool}")
     if dry_run:
+        if inspect_tool_directory(root, user):
+            print(f"{user.pw_name}: compatibility tool container ownership/access will be repaired")
         print(f"{user.pw_name}: preflight passed; local Proton: {proton}")
         return
     safe_directory(root, parent)
@@ -478,6 +518,13 @@ def main():
     for user in users:
         run_as_user(user, lambda: execute(user, True))
     if not args.dry_run:
+        if args.action in ("install", "migrate"):
+            # Validate every container before repairing any. Package and config
+            # writes still happen only after dropping to the target identity.
+            for user in users:
+                inspect_tool_directory(storage.safe_steam_root(Path(user.pw_dir)), user)
+            for user in users:
+                inspect_tool_directory(storage.safe_steam_root(Path(user.pw_dir)), user, repair=True)
         for user in users:
             run_as_user(user, lambda: execute(user, False))
         if args.action == "tools":

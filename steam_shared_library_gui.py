@@ -1195,7 +1195,8 @@ class SharedSteamGui(tk.Tk):
                 return
             details = "\n\n".join(plan["account"] + "\nProton: " + plan.get("proton", "missing")
                                     + "\nRuntime: " + (plan.get("runtime_appid") or "none required") + (" (local)" if plan.get("runtime_local") else " (needs local installation)")
-                                    + "\nPersonal settings: " + plan["prefix_root"] for plan in plans)
+                                    + "\nPersonal settings: " + plan["prefix_root"]
+                                    + ("\nRepair access to the existing compatibility tool folder." if plan.get("tool_directory_repair") else "") for plan in plans)
             text = "People: " + ", ".join(users) + "\n\nRegister shared games, select local install preferences, install personal wrappers, and select them automatically. Per-game overrides are preserved. Steam closes first; changed settings and previous wrappers are backed up. Game-update permission monitoring will be enabled.\n\n" + details
             if not self.confirm_change("Review account setup", "Set up each person's Steam account to use shared games with their own private settings. Steam will close during setup; start it again when setup finishes.", text, "Set up accounts", parent):
                 return
