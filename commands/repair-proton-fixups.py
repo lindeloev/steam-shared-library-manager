@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import stat
 from pathlib import Path
 from typing import NoReturn
@@ -139,6 +140,13 @@ def main() -> None:
     active = relevant_processes(proton)
     if active:
         fail("Close Steam and Proton for all users before repairing pending fixups: " + ", ".join(active))
+    # Legacy shared Proton repair must never mutate user-controlled paths as root.
+    owner = pwd.getpwuid(proton.stat().st_uid)
+    if owner.pw_uid < 1000:
+        fail("This legacy tool is root-owned. Migrate it into each account's local library instead.")
+    os.initgroups(owner.pw_name, owner.pw_gid)
+    os.setgid(owner.pw_gid)
+    os.setuid(owner.pw_uid)
     changed = restore(proton)
     print(f"Restored pending SteamPipe permissions for {proton} ({changed} file modes).")
 

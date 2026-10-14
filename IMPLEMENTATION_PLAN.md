@@ -34,3 +34,7 @@ Additional requirements:
   ambiguous or conflicting installations untouched and explain the conflict.
 - Make game updates resilient: default named-user ACLs plus targeted permission
   reconciliation when app manifests change; tolerate Steam/client schema changes.
+
+- Step 2 complete: dedicated-library validation; descriptor-based recursive repair;
+  protected/private paths, external symlinks, special files and hardlinks refused;
+  legacy Proton permission restore drops root before mutation.

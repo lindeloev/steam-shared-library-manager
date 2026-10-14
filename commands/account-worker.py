@@ -189,6 +189,11 @@ def main():
     parser.add_argument("users", nargs="+")
     args = parser.parse_args()
     storage = load_storage()
+    if args.library is not None:
+        spec = importlib.util.spec_from_file_location("library_backend", HERE / "library-backend.py")
+        library_backend = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(library_backend)
+        args.library = library_backend.validate_library(args.library)
     assets = {"proton": read_asset(HERE / "proton"),
               "registration": read_asset(HERE.parent / "steam-shared-library-proton.vdf")}
     users = [pwd.getpwnam(name) for name in args.users]

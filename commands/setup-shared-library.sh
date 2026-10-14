@@ -16,6 +16,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/_common.sh"
 library=$(require_safe_library_path "$2") || exit 1
 require_not_personal_steam_root "$library" || exit 1
+/usr/bin/python3 -I -B "$script_dir/library-backend.py" --library "$library" --validate-new >/dev/null
 group_name=$4
 shift 4
 
