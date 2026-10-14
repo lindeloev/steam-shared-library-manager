@@ -47,9 +47,12 @@ MANIFEST = load_backend("manifest-helper")
 
 def read_text(path: Path) -> str:
     try:
-        if path.stat().st_size > 16 * 1024 * 1024:
-            return ""
-        return path.read_text(encoding="utf-8", errors="replace")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 16 * 1024 * 1024:
+                return ""
+            return handle.read()
     except OSError:
         return ""
 
@@ -347,11 +350,13 @@ def wrapper_health(root: Path, tool: Path | None, local_protons: list[str], expe
         manifest = read_text(root / f"steamapps/appmanifest_{required}.acf")
         directory = vdf_value(manifest, "installdir")
         candidate = root / "steamapps/common" / directory
-        if not directory or not safe_existing_descendant(root, candidate) or not candidate.is_dir():
-            problems.append(f"Required runtime {required} is missing from local storage")
+        flags = vdf_value(manifest, "StateFlags")
+        complete = flags.isdigit() and int(flags) & 4 and not int(flags) & (256 | 512 | 1024)
+        if not complete or not directory or not safe_existing_descendant(root, candidate) or not candidate.is_dir():
+            problems.append(f"Required runtime {required} is missing or incomplete in local storage")
     try:
         expected_wrapper = Path(__file__).with_name("proton").read_bytes()
-        if hashlib.sha256(launcher.read_bytes()).digest() != hashlib.sha256(expected_wrapper).digest():
+        if hashlib.sha256(read_text(launcher).encode()).digest() != hashlib.sha256(expected_wrapper).digest():
             problems.append("Wrapper is outdated; rerun setup")
     except OSError:
         problems.append("Cannot verify wrapper version")

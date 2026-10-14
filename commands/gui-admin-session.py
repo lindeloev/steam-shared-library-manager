@@ -260,7 +260,12 @@ def main() -> None:
         SESSION_LOCK = load_lock(runtime_commands)
         # The GUI closes this pipe when its window closes; EOF ends the session.
         while True:
-            line = sys.stdin.readline()
+            line = sys.stdin.readline(65537)
+            if len(line) > 65536:
+                while line and not line.endswith("\n"):
+                    line = sys.stdin.readline(65537)
+                respond({"code": 2, "output": "Administrative request exceeds size limit."})
+                continue
             if not line:
                 return
             try:

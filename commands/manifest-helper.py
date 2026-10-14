@@ -70,7 +70,10 @@ def restart_pending(tool, uid=None):
         return False
     if marker.is_symlink() or marker.stat().st_size > 16384:
         raise ValueError("Unsafe Steam restart marker")
-    previous = json.loads(marker.read_text()).get("steam", {})
+    data = json.loads(marker.read_text())
+    if not isinstance(data, dict) or not isinstance(data.get("steam"), dict):
+        raise ValueError("Invalid Steam restart marker")
+    previous = data["steam"]
     current = steam_identity(uid)
     # If Steam was hidden inside a PID namespace, require manager setup while
     # Steam is closed rather than guessing that a restart happened.

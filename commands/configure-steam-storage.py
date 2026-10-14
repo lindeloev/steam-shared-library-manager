@@ -108,7 +108,7 @@ def safe_file(root: Path, path: Path) -> Path:
 
 def read_regular_text(path: Path) -> str:
     """Read one regular file without following a final-component symlink."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode) or os.fstat(descriptor).st_size > 16 * 1024 * 1024:
             raise ValueError(f"not a regular Steam configuration file: {path}")
@@ -132,7 +132,7 @@ def atomic_update(
     backup_name = path.name + ".steam-shared-library-manager-backup." + uuid.uuid4().hex
     temporary_name = path.name + ".steam-shared-library-manager." + uuid.uuid4().hex
     def current_text():
-        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > 16 * 1024 * 1024:

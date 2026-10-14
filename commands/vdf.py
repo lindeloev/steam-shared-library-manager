@@ -141,7 +141,11 @@ def set_mapping(text, appid, name, *, source=None):
         section = object_entry(text, "CompatToolMapping")
     entry = find(section.value, str(appid))
     replacement = source if source is not None else (f'"{appid}" {{ "name" "{escape(name)}" "config" "" "priority" "250" }}')
-    if not replacement:
+    if replacement:
+        restored = parse(replacement)
+        if len(restored) != 1 or restored[0].key != str(appid) or not isinstance(restored[0].value, list):
+            raise ValueError("Invalid saved compatibility entry")
+    else:
         replacement = ""
     if entry:
         return text[:entry.start] + replacement + text[entry.end:]

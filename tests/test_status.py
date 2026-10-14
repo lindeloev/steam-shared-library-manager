@@ -177,6 +177,18 @@ class StatusTests(unittest.TestCase):
             self.assertEqual(self.status.shared_support_tools(library), ["Proton 99.0", "SteamLinuxRuntime_future"])
             self.assertEqual(self.status.games(library, []), [])
 
+    def test_status_reader_does_not_follow_links_or_block_on_fifos(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            private = root / "private"
+            private.write_text("private configuration")
+            link = root / "config.vdf"
+            link.symlink_to(private)
+            self.assertEqual(self.status.read_text(link), "")
+            fifo = root / "appmanifest_42.acf"
+            __import__("os").mkfifo(fifo)
+            self.assertEqual(self.status.read_text(fifo), "")
+
     def test_local_wrapper_rejects_missing_runtime_and_stale_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -195,7 +207,7 @@ class StatusTests(unittest.TestCase):
             self.assertTrue(any("runtime" in problem for problem in problems))
             runtime = root / "steamapps/common/SteamLinuxRuntime_sniper"
             runtime.mkdir()
-            (root / "steamapps/appmanifest_1628350.acf").write_text('"AppState" { "appid" "1628350" "installdir" "SteamLinuxRuntime_sniper" }')
+            (root / "steamapps/appmanifest_1628350.acf").write_text('"AppState" { "appid" "1628350" "StateFlags" "4" "installdir" "SteamLinuxRuntime_sniper" }')
             self.assertTrue(self.status.wrapper_health(root, tool, [str(proton)])[0])
             (proton / "toolmanifest.vdf").write_text(manifest.replace("1628350", "4183110"))
             self.assertFalse(self.status.wrapper_health(root, tool, [str(proton)])[0])

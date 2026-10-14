@@ -26,3 +26,8 @@ class VDFTests(unittest.TestCase):
         result = vdf.set_mapping(text, "0", "", source='"0" { "name" "proton_experimental" "priority" "75" }')
         self.assertEqual(vdf.mappings(result)["0"]["name"], "proton_experimental")
         self.assertEqual(vdf.mappings(result)["42"]["name"], "proton_90")
+
+    def test_recovery_cannot_restore_another_apps_entry(self):
+        text = '"Steam" { "CompatToolMapping" { "42" { "name" "steam-shared-library-proton" } } }'
+        with self.assertRaises(ValueError):
+            vdf.set_mapping(text, "42", "", source='"0" { "name" "proton_experimental" }')

@@ -76,3 +76,9 @@ Additional requirements:
   concrete per-account setup preview, automatic post-action status refresh, fewer
   success dialogs and private diagnostic export. All six GUI panels and both detail
   windows rendered on this PC's display with test state; Steam installs unchanged.
+
+- Final integration checks: all CLI shell syntax and ShellCheck pass (temporary
+  extracted ShellCheck package; no system package installation). Added bounded,
+  nonblocking no-follow readers, recovery entry validation, ownership checks and
+  incomplete-runtime detection. Host GUI rendered without invoking privileged
+  actions; final interactive account/migration/service acceptance remains pending.

@@ -79,6 +79,15 @@ def support(name, directory, appid):
             or appid in ("228980", "1161040", "1826330"))
 
 
+def read_manifest(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+            raise ValueError(f"Unsafe tool manifest: {path}")
+        return handle.read()
+
+
 def sources(library, vdf):
     result = []
     common = library / "steamapps/common"
@@ -87,7 +96,7 @@ def sources(library, vdf):
     for path in sorted((library / "steamapps").glob("appmanifest_*.acf")):
         if path.is_symlink() or path.stat().st_size > 1024 * 1024:
             raise ValueError(f"Unsafe tool manifest: {path}")
-        text = path.read_text()
+        text = read_manifest(path)
         entry = vdf.object_entry(text, "AppState")
         if entry is None:
             raise ValueError(f"Malformed app manifest: {path.name}")
@@ -122,7 +131,7 @@ def plan(root, library, vdf):
         elif destination.exists() or manifest.exists():
             identical = destination.is_dir() and manifest.is_file() and tree_digest(destination)[0] == item["digest"]
             if identical:
-                local = vdf.object_entry(manifest.read_text(), "AppState")
+                local = vdf.object_entry(read_manifest(manifest), "AppState")
                 source = vdf.object_entry(item["manifest_text"], "AppState")
                 identical = (vdf.scalar(local, "appid") == item["appid"]
                              and vdf.scalar(local, "buildid") == vdf.scalar(source, "buildid")
@@ -187,7 +196,7 @@ def copy_one(item, root, state, replace_conflicts=False):
         if tree_digest(package)[0] != item["digest"] or tree_digest(item["source"])[0] != item["digest"]:
             raise ValueError("Tool changed during copying; staged copy was discarded")
         make_copy_private(package)
-        if item["manifest"].read_text() != item["manifest_text"]:
+        if read_manifest(item["manifest"]) != item["manifest_text"]:
             raise ValueError("Steam changed the source manifest during copying")
         staged_manifest = staging / "manifest.acf"
         staged_manifest.write_text(item["manifest_text"])
@@ -229,7 +238,7 @@ def quarantine_sources(library, items):
         raise ValueError("Unsafe shared quarantine directory")
     quarantine.mkdir(parents=True, mode=0o700)
     for item in items:
-        if tree_digest(item["source"])[0] != item["digest"] or item["manifest"].read_text() != item["manifest_text"]:
+        if tree_digest(item["source"])[0] != item["digest"] or read_manifest(item["manifest"]) != item["manifest_text"]:
             raise ValueError("Shared source changed; keeping it registered")
         destination = quarantine / item["directory"]
         item["source"].rename(destination)

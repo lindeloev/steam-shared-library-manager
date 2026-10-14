@@ -61,8 +61,12 @@ def read_settings(root):
     if path.is_symlink() or path.stat().st_size > 1024 * 1024:
         raise ValueError("Unsafe settings recovery record")
     data = json.loads(path.read_text())
-    if data.get("schema") != 1 or not isinstance(data.get("previous_mappings"), dict):
+    if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("previous_mappings"), dict):
         raise ValueError("Unrecognized settings recovery record")
+    if any(not isinstance(key, str) or not key.isdigit() or not isinstance(value, str) for key, value in data["previous_mappings"].items()):
+        raise ValueError("Invalid previous compatibility selections")
+    if "prefix_root" in data and not isinstance(data["prefix_root"], str):
+        raise ValueError("Invalid saved prefix location")
     return data
 
 
@@ -212,7 +216,7 @@ def local_proton(root: Path, requested: str) -> Path:
             continue
         launcher = candidate / "proton"
         manifest = candidate / "toolmanifest.vdf"
-        if (not launcher.is_symlink() and launcher.is_file() and os.access(launcher, os.X_OK)
+        if (not launcher.is_symlink() and launcher.is_file() and launcher.stat().st_uid == os.geteuid() and launcher.stat().st_mode & 0o100
                 and manifest.is_file() and manifest.resolve().is_relative_to(root)):
             return candidate
     raise ValueError(f"Install an official Proton in this person's local library: {root}")
