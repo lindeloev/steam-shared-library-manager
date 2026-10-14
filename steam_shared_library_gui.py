@@ -457,8 +457,19 @@ class SharedSteamGui(tk.Tk):
                                 ttk.Button(content, text="Open required runtime installation for " + name,
                                            command=lambda appid=runtime: self.open_runtime_install(appid)).pack(anchor="w", pady=(0, 8))
                             else:
-                                ttk.Label(content, text="From " + name + "'s Ubuntu session, open: steam://install/" + runtime,
-                                          wraplength=590).pack(anchor="w", pady=(0, 8))
+                                ttk.Label(content, text="From " + name + "'s Ubuntu session, open:",
+                                          wraplength=590).pack(anchor="w")
+                                link = ttk.Entry(content, width=38)
+                                link.insert(0, "steam://install/" + runtime)
+                                link.configure(state="readonly")
+                                link.pack(anchor="w", pady=(4, 8))
+
+                                def select_link(event):
+                                    event.widget.selection_range(0, "end")
+                                    return "break"
+
+                                link.bind("<Control-a>", select_link)
+                                link.bind("<Control-A>", select_link)
             elif self.selected_users():
                 ttk.Label(content, text="Their current setup has not been checked yet. Use Refresh full status to inspect it.", wraplength=590).pack(anchor="w", pady=(0, 10))
             ready = [name for name in self.selected_users() if report.get(name, {}).get("steam_initialized")]
