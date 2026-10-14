@@ -195,9 +195,10 @@ def prepare_new(path, group_id, users):
         os.close(fd)
 
 
-def repair_tree(fd, group_id, users=(), *, device=None, acl=None, relative="", remove_users=()):
+def repair_tree(fd, group_id, users=(), *, device=None, acl=None, relative="", remove_users=(), owners=None):
 
     acl = acl or ACL()
+    owners = {} if owners is None else owners
     info = os.fstat(fd)
     device = info.st_dev if device is None else device
     if info.st_dev != device:
@@ -205,8 +206,15 @@ def repair_tree(fd, group_id, users=(), *, device=None, acl=None, relative="", r
     if not stat.S_ISDIR(info.st_mode) and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1):
         raise ValueError("Refusing special files or multiply linked game files")
     if os.geteuid() == 0:
-        if stat.S_ISREG(info.st_mode) and info.st_uid < 1000:
-            raise ValueError("Refusing to make a root/service-owned file shared")
+        if stat.S_ISREG(info.st_mode):
+            if info.st_uid not in owners:
+                try:
+                    owner = pwd.getpwuid(info.st_uid)
+                    owners[info.st_uid] = owner.pw_uid >= 1000 and not owner.pw_shell.endswith(("nologin", "false"))
+                except KeyError:
+                    owners[info.st_uid] = False
+            if not owners[info.st_uid]:
+                raise ValueError("Refusing to make a root/service/unknown-owned file shared")
         os.fchown(fd, -1, group_id)
     mode = stat.S_IMODE(info.st_mode) & ~(stat.S_ISUID | stat.S_ISGID)
     os.fchmod(fd, mode | (0o2070 if stat.S_ISDIR(info.st_mode) else 0o060))
@@ -224,7 +232,7 @@ def repair_tree(fd, group_id, users=(), *, device=None, acl=None, relative="", r
                 raise ValueError(f"Refusing special or multiply linked file: {name}")
             child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
             try:
-                count += repair_tree(child, group_id, users, device=device, acl=acl, relative=(relative + "/" + name).lstrip("/"), remove_users=remove_users)
+                count += repair_tree(child, group_id, users, device=device, acl=acl, relative=(relative + "/" + name).lstrip("/"), remove_users=remove_users, owners=owners)
             finally:
                 os.close(child)
     return count

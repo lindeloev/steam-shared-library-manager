@@ -3,6 +3,8 @@ import importlib.util
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +66,19 @@ class LibraryBackendTests(unittest.TestCase):
         (self.library / "steamapps").symlink_to(outside)
         with self.assertRaises(OSError):
             self.backend.validate_library(self.library)
+
+    def test_privileged_repair_rejects_service_owned_regular_files(self):
+        file = self.library / "steamapps/private"
+        file.write_text("private service data")
+        file.chmod(0o600)
+        fd = os.open(file, os.O_RDONLY)
+        try:
+            with mock.patch.object(self.backend.os, "geteuid", return_value=0), mock.patch.object(self.backend.pwd, "getpwuid", return_value=SimpleNamespace(pw_uid=os.getuid(), pw_shell="/usr/sbin/nologin")):
+                with self.assertRaisesRegex(ValueError, "service"):
+                    self.backend.repair_tree(fd, os.getgid())
+            self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+        finally:
+            os.close(fd)
 
     def test_membership_change_removes_managed_named_acl(self):
         path = self.library / "steamapps/file"

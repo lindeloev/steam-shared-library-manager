@@ -865,7 +865,7 @@ class SharedSteamGui(tk.Tk):
             return
         path = self.library.get()
         text = ("This is an existing Steam library, but its shared Linux access needs repair. Close Steam for all users first.\n\n"
-                "Repair group ownership, group read/write access, setgid directories, and default ACLs inside:\n\n"
+                "Repair group ownership and named user ACLs in this dedicated game library. Enable automatic permission repair for completed game updates:\n\n"
                 + path + "\n\nThis does not delete or download games, and it will not follow links outside this library.")
         if not messagebox.askyesno("Repair shared access", text, parent=self):
             return

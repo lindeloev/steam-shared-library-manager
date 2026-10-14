@@ -363,6 +363,8 @@ def uninstall(user, args, storage, dry_run):
 
 
 def run_as_user(user, operation):
+    if user.pw_uid < 1000 or user.pw_shell.endswith(("nologin", "false")):
+        raise ValueError("Only normal login accounts can be configured")
     sys.stdout.flush()
     sys.stderr.flush()
     pid = os.fork()
