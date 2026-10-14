@@ -405,6 +405,22 @@ class SharedSteamGui(tk.Tk):
             selected = ", ".join(self.selected_users()) or "No people selected yet"
             ttk.Label(content, text="Selected: " + selected, wraplength=590).pack(anchor="w", pady=(0, 10))
             report = {str(user["name"]): user for user in self.status.get("users", [])}
+            ready = [name for name in self.selected_users() if report.get(name, {}).get("steam_initialized")]
+            not_started = [name for name in self.selected_users() if not report.get(name, {}).get("steam_initialized")]
+            actions = ttk.Frame(content)
+            actions.pack(anchor="w", fill="x", pady=(0, 10))
+            if ready:
+                label = "Set up selected people" if len(ready) == len(self.selected_users()) else "Set up ready people (" + ", ".join(ready) + ")"
+                ttk.Button(actions, text=label, command=lambda people=ready: self.add_users(people)).pack(anchor="w")
+            else:
+                ttk.Label(actions, text="No selected person has started native Steam yet, so there is nothing to configure in this step.", wraplength=590).pack(anchor="w")
+            running = [name for name in self.selected_users() if report.get(name, {}).get("steam_running")]
+            if running:
+                ttk.Button(actions, text="Close Steam for selected people", command=self.close_steam).pack(anchor="w", pady=(8, 0))
+                ttk.Button(actions, text="Force stop Steam for selected people…", command=self.force_close_steam).pack(anchor="w", pady=(6, 0))
+            ttk.Label(content, text="Setup registers shared games, makes local storage the default, and copies matching runtimes when available. Steam configuration changes are backed up. Choose the shared folder when installing games.",
+                      foreground="#555555", wraplength=590).pack(anchor="w", pady=(0, 10))
+            manual_heading = False
             if self.selected_users() and self.status_checked:
                 columns = ("person", "group", "steam", "tool", "storage")
                 table = ttk.Treeview(content, columns=columns, show="headings", height=min(len(self.selected_users()), 5))
@@ -439,18 +455,22 @@ class SharedSteamGui(tk.Tk):
                                                        "Ready" if user.get("tool_installed") else "Needs attention" if user.get("tool_present") else "Not installed",
                                                        "Local library" if user.get("local_library_default") else "Other"),
                                  tags=("ready",) if complete else ())
-                table.pack(anchor="w", fill="x", pady=(0, 10))
+                table.pack(anchor="w", fill="x", pady=(0, 10), before=actions)
                 for name in self.selected_users():
                     user = report.get(name, {})
                     problems = user.get("tool_problems", [])
                     if not problems:
                         continue
+                    if not manual_heading:
+                        ttk.Label(content, text="Manual steps (if still needed after setup)",
+                                  font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(8, 10))
+                        manual_heading = True
                     ttk.Label(content, text=name + ":\n• " + "\n• ".join(str(problem) for problem in problems),
                               foreground="#991b1b", justify="left", wraplength=590).pack(anchor="w", pady=(0, 8))
                     if any("Required runtime" in str(problem) for problem in problems):
                         runtime = str(user.get("runtime_appid", ""))
-                        ttk.Label(content, text="Finish installing the required Steam Linux Runtime in " + name
-                                  + "'s local Steam library, then refresh status. Reinstalling the wrapper will not supply the runtime.",
+                        ttk.Label(content, text="If setup cannot copy a matching runtime automatically, install the required Steam Linux Runtime in " + name
+                                  + "'s local Steam library, then refresh status.",
                                   justify="left", wraplength=590).pack(anchor="w", pady=(0, 8))
                         if runtime.isdigit():
                             if name == self.current_user_name():
@@ -472,28 +492,12 @@ class SharedSteamGui(tk.Tk):
                                 link.bind("<Control-A>", select_link)
             elif self.selected_users():
                 ttk.Label(content, text="Their current setup has not been checked yet. Use Refresh full status to inspect it.", wraplength=590).pack(anchor="w", pady=(0, 10))
-            ready = [name for name in self.selected_users() if report.get(name, {}).get("steam_initialized")]
-            not_started = [name for name in self.selected_users() if not report.get(name, {}).get("steam_initialized")]
             if not_started:
+                if not manual_heading:
+                    ttk.Label(content, text="Manual steps", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(8, 10))
                 ttk.Label(content, text="Before this step, each of these people must log in to the native Steam client once and let its first-time setup finish: "
                           + ", ".join(not_started) + ". They can then close Steam and return here to refresh status.",
                           foreground="#991b1b", wraplength=590).pack(anchor="w", pady=(0, 10))
-            ttk.Label(
-                content,
-                text="Setup registers shared games and makes local storage the default. Steam may change this preference; the manager checks actual tool locations. "
-                     "Choose the shared folder when installing games. Steam configuration changes are backed up.",
-                foreground="#555555",
-                wraplength=590,
-            ).pack(anchor="w", pady=(0, 10))
-            if ready:
-                label = "Set up selected people" if len(ready) == len(self.selected_users()) else "Set up ready people (" + ", ".join(ready) + ")"
-                ttk.Button(content, text=label, command=lambda people=ready: self.add_users(people)).pack(anchor="w")
-            else:
-                ttk.Label(content, text="No selected person has started native Steam yet, so there is nothing to configure in this step.", wraplength=590).pack(anchor="w")
-            running = [name for name in self.selected_users() if report.get(name, {}).get("steam_running")]
-            if running:
-                ttk.Button(content, text="Close Steam for selected people", command=self.close_steam).pack(anchor="w", pady=(8, 0))
-                ttk.Button(content, text="Force stop Steam for selected people…", command=self.force_close_steam).pack(anchor="w", pady=(6, 0))
             ttk.Label(content, text="Step 4 must detect an official Proton before this setup can run.", wraplength=590).pack(anchor="w", pady=(12, 0))
         else:
             report = {str(user["name"]): user for user in self.status.get("users", [])}
