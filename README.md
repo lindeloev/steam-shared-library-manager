@@ -1,5 +1,7 @@
 # Steam Shared Library Manager
 
+**OBS: THIS IS 100% AI GENERATED. I ONLY TESTED IT. I DID NOT QA CODE**
+
 Share one Steam game installation between several Linux accounts without
 sharing settings, Proton state, or non-cloud saves. This makes Steam behave
 similar to Windows for multiple users on the same computer.
