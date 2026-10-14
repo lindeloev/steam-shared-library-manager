@@ -122,7 +122,7 @@ def describe_setup(user, args, storage):
         source = MANIFEST.generate(storage.read_regular_text(storage.safe_file(root, proton / "toolmanifest.vdf")))
         runtime = VDF.scalar(VDF.object_entry(source, "manifest"), "require_tool_appid")
         result.update(proton=str(proton), runtime_appid=runtime,
-                      runtime_local=(not runtime or (root / f"steamapps/appmanifest_{runtime}.acf").is_file()))
+                      runtime_local=MANIFEST.runtime_installed(root, runtime))
     except (OSError, ValueError) as error:
         result["error"] = str(error)
     print(json.dumps(result))
@@ -329,6 +329,9 @@ def install(user, args, storage, assets, dry_run):
             apply_mappings(user, root, {"0": TOOL_ID}, storage)
         TRANSACTIONS.finish(receipt, "complete")
         print(f"{user.pw_name}: installed local Proton wrapper; previous wrapper: {backup if backup.exists() else 'none'}")
+        runtime = VDF.scalar(VDF.object_entry(manifest, "manifest"), "require_tool_appid")
+        if not MANIFEST.runtime_installed(root, runtime):
+            print(f"{user.pw_name}: ACTION NEEDED: wrapper installed, but runtime {runtime} is missing or incomplete locally. Finish its installation in this account's local Steam library (steam://install/{runtime}), then refresh status.")
     except BaseException as error:
         TRANSACTIONS.finish(receipt, "failed", str(error))
         raise

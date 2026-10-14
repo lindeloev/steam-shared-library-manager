@@ -356,12 +356,7 @@ def wrapper_health(root: Path, tool: Path | None, local_protons: list[str], expe
     if vdf_value(installed, "commandline") != "/proton %verb%" or vdf_value(installed, "require_tool_appid") != required:
         problems.append("Wrapper runtime manifest needs refresh after a Proton update")
     if required:
-        manifest = read_text(root / f"steamapps/appmanifest_{required}.acf")
-        directory = vdf_value(manifest, "installdir")
-        candidate = root / "steamapps/common" / directory
-        flags = vdf_value(manifest, "StateFlags")
-        complete = flags.isdigit() and int(flags) & 4 and not int(flags) & (256 | 512 | 1024)
-        if not complete or not directory or not safe_existing_descendant(root, candidate) or not candidate.is_dir():
+        if not MANIFEST.runtime_installed(root, required):
             problems.append(f"Required runtime {required} is missing or incomplete in local storage")
     try:
         expected_wrapper = Path(__file__).with_name("proton").read_bytes()
@@ -443,8 +438,10 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
         ),
         "local_library_default": local_library_is_default(steam_root) if steam_root is not None else False,
         "available_protons": local_protons,
+        "tool_present": bool(tool_dir is not None and (tool_dir / "proton").is_file()),
         "tool_installed": healthy,
         "tool_problems": tool_problems,
+        "runtime_appid": vdf_value(read_text(Path(configured_proton) / "toolmanifest.vdf"), "require_tool_appid") if configured_proton in local_protons else "",
         "managed_tools": managed_tools,
         "successful_launches": launches,
         "personal_tool_selected": mappings.get("0") == TOOL_ID,

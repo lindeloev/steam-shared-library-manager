@@ -6,6 +6,7 @@ import subprocess
 import importlib.util
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 
@@ -50,6 +51,34 @@ def config(text):
             raise ValueError("Invalid wrapper configuration")
         values[key] = value
     return values
+
+
+def runtime_installed(root, appid):
+    """Require a completed runtime package in this account's local library."""
+    if not appid:
+        return True
+    if not appid.isdigit():
+        return False
+    try:
+        path = root / f"steamapps/appmanifest_{appid}.acf"
+        if path.resolve(strict=True) != path:
+            return False
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+                return False
+            entry = VDF.object_entry(handle.read(), "AppState")
+        directory = VDF.scalar(entry, "installdir")
+        flags = VDF.scalar(entry, "StateFlags")
+        if (VDF.scalar(entry, "appid") != appid or not directory
+                or Path(directory).name != directory or directory in (".", "..")
+                or not flags.isdigit() or not int(flags) & 4 or int(flags) & (256 | 512 | 1024)):
+            return False
+        package = root / "steamapps/common" / directory
+        return package.resolve(strict=True) == package and package.is_dir()
+    except (OSError, ValueError):
+        return False
 
 
 def steam_identity(uid=None):

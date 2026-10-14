@@ -436,10 +436,29 @@ class SharedSteamGui(tk.Tk):
                         and user.get("local_library_default")
                     )
                     table.insert("", "end", values=(name, "Yes" if user.get("in_group") else "No", steam,
-                                                       "Installed" if user.get("tool_installed") else "Not installed",
+                                                       "Ready" if user.get("tool_installed") else "Needs attention" if user.get("tool_present") else "Not installed",
                                                        "Local library" if user.get("local_library_default") else "Other"),
                                  tags=("ready",) if complete else ())
                 table.pack(anchor="w", fill="x", pady=(0, 10))
+                for name in self.selected_users():
+                    user = report.get(name, {})
+                    problems = user.get("tool_problems", [])
+                    if not problems:
+                        continue
+                    ttk.Label(content, text=name + ":\n• " + "\n• ".join(str(problem) for problem in problems),
+                              foreground="#991b1b", justify="left", wraplength=590).pack(anchor="w", pady=(0, 8))
+                    if any("Required runtime" in str(problem) for problem in problems):
+                        runtime = str(user.get("runtime_appid", ""))
+                        ttk.Label(content, text="Finish installing the required Steam Linux Runtime in " + name
+                                  + "'s local Steam library, then refresh status. Reinstalling the wrapper will not supply the runtime.",
+                                  justify="left", wraplength=590).pack(anchor="w", pady=(0, 8))
+                        if runtime.isdigit():
+                            if name == self.current_user_name():
+                                ttk.Button(content, text="Open required runtime installation for " + name,
+                                           command=lambda appid=runtime: self.open_runtime_install(appid)).pack(anchor="w", pady=(0, 8))
+                            else:
+                                ttk.Label(content, text="From " + name + "'s Ubuntu session, open: steam://install/" + runtime,
+                                          wraplength=590).pack(anchor="w", pady=(0, 8))
             elif self.selected_users():
                 ttk.Label(content, text="Their current setup has not been checked yet. Use Refresh full status to inspect it.", wraplength=590).pack(anchor="w", pady=(0, 10))
             ready = [name for name in self.selected_users() if report.get(name, {}).get("steam_initialized")]
@@ -903,12 +922,18 @@ class SharedSteamGui(tk.Tk):
             self.status_checked = True
             if self.status.get("shared_support_tools"):
                 self.status_label.configure(text="Action needed: move Proton/runtimes out of shared storage", foreground="#991b1b")
+            elif any(user.get("tool_problems") for user in self.selected_statuses()):
+                self.status_label.configure(text="Account setup needs attention — see Step 5 and the log", foreground="#991b1b")
             else:
                 self.status_label.configure(text="Full status checked: " + datetime.now().strftime("%H:%M:%S"), foreground="#166534")
             self.update_journey()
             problems = [str(problem) for problem in self.status.get("shared_access_problems", [])]
             if problems:
                 self.log_message("Shared access is not ready:\n- " + "\n- ".join(problems))
+            for user in self.selected_statuses():
+                if user.get("tool_problems"):
+                    self.log_message(str(user["name"]) + ": account setup needs attention:\n- "
+                                     + "\n- ".join(str(problem) for problem in user["tool_problems"]), "error")
             self.log_message("Status refreshed.")
             if after is not None:
                 after()
@@ -1140,6 +1165,8 @@ class SharedSteamGui(tk.Tk):
             self.set_card(5, "#e5e7eb")
         elif users and any(not user["steam_initialized"] for user in users):
             self.set_card(5, "#fee2e2")
+        elif users and any(user.get("tool_present") and user.get("tool_problems") for user in users):
+            self.set_card(5, "#fee2e2")
         elif not self.status.get("shared_support_tools") and users and all(
             user["in_group"]
             and user["tool_installed"]
@@ -1207,10 +1234,14 @@ class SharedSteamGui(tk.Tk):
                                     + "\nPersonal settings: " + plan["prefix_root"]
                                     + ("\nRepair access to the existing compatibility tool folder." if plan.get("tool_directory_repair") else "") for plan in plans)
             text = "People: " + ", ".join(users) + "\n\nRegister shared games, select local install preferences, install personal wrappers, and select them automatically. Per-game overrides are preserved. Steam closes first; changed settings and previous wrappers are backed up. Game-update permission monitoring will be enabled.\n\n" + details
-            if not self.confirm_change("Review account setup", "Set up each person's Steam account to use shared games with their own private settings. Steam will close during setup; start it again when setup finishes.", text, "Set up accounts", parent):
+            description = "Set up each person's Steam account to use shared games with their own private settings. Steam will close during setup; start it again when setup finishes."
+            missing_runtime = [plan["account"] for plan in plans if not plan.get("runtime_local")]
+            if missing_runtime:
+                description += "\n\nA required runtime still needs a local download for: " + ", ".join(missing_runtime) + ". This setup installs the wrapper; those accounts cannot launch games until their runtime installation finishes."
+            if not self.confirm_change("Review account setup", description, text, "Set up accounts", parent):
                 return
             self.run_admin("add-user.sh", ["--close-steam", "--default-library", self.library.get(), "--group", GROUP, "--base-proton", proton, *users],
-                           "Accounts configured. Restart Steam to load their personal wrappers.", 5, parent, self.refresh_status)
+                           "Wrapper installation finished. Checking each account's readiness now.", 5, parent, self.refresh_status)
         self.run_admin_async("preview-setup.py", ["--library", self.library.get(), "--base-proton", proton, *users], preview, "Preparing account setup preview…")
 
     def open_proton_install(self) -> None:
@@ -1218,6 +1249,12 @@ class SharedSteamGui(tk.Tk):
         subprocess.Popen(["/usr/bin/xdg-open", "steam://install/1493710"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.log_message("Opened Proton Experimental installation in the current user's Steam session. Keep tools local; refresh after the download.")
         self.after(5000, self.poll_tool_install)
+
+    def open_runtime_install(self, appid: str) -> None:
+        if not appid.isdigit():
+            return
+        subprocess.Popen(["/usr/bin/xdg-open", "steam://install/" + appid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.log_message("Opened required runtime installation for the current account. Keep it in local storage, then refresh Step 5.")
 
     def poll_tool_install(self) -> None:
         if self.active_tasks:
