@@ -52,3 +52,9 @@ Additional requirements:
   mappings saved for removal; per-game version migration creates distinct local
   wrappers and refuses unavailable pinned versions instead of silently substituting.
   Strict VDF editing preserves unrelated configuration and rejects ambiguity.
+
+- Step 6 complete: verified local tool copying, destination conflict previews and
+  explicit backup-and-replace, source-change detection, private copied permissions,
+  runtime UID caches excluded, and recoverable shared quarantine only after all
+  selected/registered account copies verify. Added GUI migration and Steam install
+  hand-off with completion polling. No host installations have been moved.

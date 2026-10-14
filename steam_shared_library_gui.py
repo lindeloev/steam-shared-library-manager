@@ -331,6 +331,8 @@ class SharedSteamGui(tk.Tk):
                           + ". Install these in each person's local library, then remove the shared copies "
                           "through Steam. Existing games and personal prefixes can stay in place.",
                           foreground="#991b1b", wraplength=590).pack(anchor="w", pady=(8, 0))
+            ttk.Button(content, text="Preview and migrate shared tools locally", command=self.migrate_shared_tools).pack(anchor="w", pady=(8, 0))
+            ttk.Button(content, text="Open Proton installation in Steam", command=self.open_proton_install).pack(anchor="w", pady=(8, 0))
             instructions = (
                 "Proton is Steam's compatibility tool for Windows-only games on Linux. Each person installs it in their local library. Keep Proton and Steam Linux Runtime out of shared storage.\n\n"
                 "1. Repeat for each person from Step 1. If they were just added to the shared-game group, log out of Ubuntu and back in first.\n\n"
@@ -1151,6 +1153,36 @@ class SharedSteamGui(tk.Tk):
                 parent,
                 self.refresh_status,
             )
+
+    def open_proton_install(self) -> None:
+        # The desktop's own Steam protocol handler runs without administrator privileges.
+        subprocess.Popen(["/usr/bin/xdg-open", "steam://install/1493710"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.log_message("Opened Proton Experimental installation in the current user's Steam session. Keep tools local; refresh after the download.")
+        self.after(5000, self.poll_tool_install)
+
+    def poll_tool_install(self) -> None:
+        if self.active_tasks:
+            self.after(5000, self.poll_tool_install)
+            return
+        self.refresh_status(after=lambda: self.after(15000, self.poll_tool_install) if not self.find_base_proton() else None)
+
+    def migrate_shared_tools(self) -> None:
+        users = sorted({*self.selected_users(), *[str(user["name"]) for user in self.status.get("users", []) if user.get("library_registered")]})
+        if not users:
+            messagebox.showwarning("Choose people", "Select at least one account first.", parent=self)
+            return
+        arguments = ["--dry-run", "--library", self.library.get(), *users]
+        def preview(code, output):
+            self.log_message(output or "No migration details returned.")
+            if code != 0:
+                messagebox.showerror("Migration preview failed", output, parent=self)
+                return
+            if not messagebox.askyesno("Migrate tools to local libraries", output + "\n\nCopy and verify these tools for all listed accounts? Different local copies are backed up before replacement. Shared copies are quarantined only after every account verifies. Steam will be closed first.", parent=self):
+                return
+            self.run_admin("close-steam.sh", users, "Steam closed; copying tools locally.", after_success=lambda: self.run_admin(
+                "migrate-shared-tools.sh", ["--replace-conflicts", "--cleanup", "--library", self.library.get(), *users],
+                "Local tools verified; shared copies retained in quarantine. Continue setup.", 4, after_success=self.refresh_status))
+        self.run_admin_async("migrate-shared-tools.sh", arguments, preview, "Checking tool packages and destination conflicts…")
 
     def find_base_proton(self, users: list[str] | None = None) -> str | None:
         """Require a local official Proton for every selected person."""

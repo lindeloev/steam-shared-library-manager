@@ -90,6 +90,49 @@ def apply_mappings(user, root, replacements, storage, dry_run=False):
         print(f"{user.pw_name}: configured compatibility selections; backup: {backup}")
 
 
+def load_migration():
+    spec = importlib.util.spec_from_file_location("tool_migration", HERE / "tool-migration.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+MIGRATION = load_migration()
+
+
+def migrate_tools(user, args, storage, dry_run):
+    root = storage.safe_steam_root(Path(user.pw_dir))
+    items = MIGRATION.plan(root, args.library, VDF)
+    for item in items:
+        print(f"{user.pw_name}: {item['operation']}: {item['name']} ({item['bytes'] / 2**30:.2f} GiB); {item['reason']}")
+    if dry_run:
+        if not args.dry_run and not args.replace_conflicts and any(x["operation"] == "conflict" for x in items):
+            raise ValueError("Local destination conflicts require explicit backup-and-replace")
+        return
+    plan = storage.prepare_user(user.pw_name, args.library)
+    state = safe_directory(root, root / ".steam-shared-library-manager/backups")
+    for item in items:
+        MIGRATION.copy_one(item, root, state, args.replace_conflicts)
+    storage.apply_user(plan)
+    recovery = read_settings(root)
+    recovery["tool_copies"] = [{"appid": x["appid"], "directory": x["directory"], "digest": x["digest"]} for x in items]
+    save_settings(root, recovery)
+
+
+def verify_tools(user, storage, baseline):
+    root = storage.safe_steam_root(Path(user.pw_dir))
+    for item in baseline:
+        target = root / "steamapps/common" / item["directory"]
+        manifest = root / "steamapps" / item["manifest"].name
+        if target.is_symlink() or manifest.is_symlink() or not manifest.is_file():
+            raise ValueError("Copied tool is missing or symlinked")
+        if MIGRATION.tree_digest(target)[0] != item["digest"]:
+            raise ValueError(f"Local verification failed for {item['name']}; shared sources remain")
+        entry = VDF.object_entry(manifest.read_text(), "AppState")
+        if VDF.scalar(entry, "appid") != item["appid"]:
+            raise ValueError("Local manifest no longer matches the verified copy")
+    print(f"{user.pw_name}: all local tool copies verified")
+
+
 def read_asset(path: Path) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -276,11 +319,13 @@ def run_as_user(user, operation):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("install", "storage", "uninstall", "migrate"), required=True)
+    parser.add_argument("--action", choices=("install", "storage", "uninstall", "migrate", "tools"), required=True)
     parser.add_argument("--base-proton", default="Proton - Experimental")
     parser.add_argument("--library", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--remove-prefixes", action="store_true")
+    parser.add_argument("--replace-conflicts", action="store_true")
+    parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("users", nargs="+")
     args = parser.parse_args()
     storage = load_storage()
@@ -292,8 +337,29 @@ def main():
     assets = {"proton": read_asset(HERE / "proton"),
               "registration": read_asset(HERE.parent / "steam-shared-library-proton.vdf")}
     users = [pwd.getpwnam(name) for name in args.users]
+    baseline = None
+    if args.action == "tools":
+        if args.library is None:
+            raise ValueError("Tool migration needs --library")
+        if not args.dry_run and subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL).returncode == 0:
+            raise ValueError("Close Steam for all accounts before copying or quarantining tools")
+        if args.cleanup:
+            selected = {user.pw_name for user in users}
+            for account in pwd.getpwall():
+                if account.pw_uid < 1000 or account.pw_name in selected:
+                    continue
+                try:
+                    root = storage.safe_steam_root(Path(account.pw_dir))
+                    text = storage.read_regular_text(storage.safe_file(root, root / "config/libraryfolders.vdf"))
+                except (OSError, ValueError):
+                    continue
+                if str(args.library) in storage.library_indexes(text):
+                    raise ValueError(f"{account.pw_name} also uses this library; include them before removing shared tools")
+        baseline = MIGRATION.sources(args.library, VDF)
     def execute(user, dry):
-        if args.action == "install":
+        if args.action == "tools":
+            migrate_tools(user, args, storage, dry)
+        elif args.action == "install":
             install(user, args, storage, assets, dry)
         elif args.action == "migrate":
             migrate(user, args, storage, assets, dry)
@@ -309,6 +375,11 @@ def main():
     if not args.dry_run:
         for user in users:
             run_as_user(user, lambda: execute(user, False))
+        if args.action == "tools":
+            for user in users:
+                run_as_user(user, lambda: verify_tools(user, storage, baseline))
+            if args.cleanup and baseline:
+                run_as_user(users[0], lambda: print("Shared sources retained in quarantine:", MIGRATION.quarantine_sources(args.library, baseline)))
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ COMMAND_FILES = (
     "account-worker.py",
     "library-backend.py",
     "vdf.py",
+    "tool-migration.py",
+    "migrate-shared-tools.sh",
     "add-user.sh",
     "close-steam.sh",
     "configure-steam-storage.py",
@@ -116,6 +118,13 @@ def arguments_are_allowed(command: str, arguments: list[str]) -> bool:
             and is_absolute_path(arguments[offset + 3])
             and are_normal_users(arguments[offset + 4:])
         )
+    if command == "migrate-shared-tools.sh":
+        offset = 0
+        for flag in ("--dry-run", "--replace-conflicts", "--cleanup"):
+            if arguments[offset:offset + 1] == [flag]:
+                offset += 1
+        return (len(arguments) >= offset + 3 and arguments[offset] == "--library"
+                and is_absolute_path(arguments[offset + 1]) and are_normal_users(arguments[offset + 2:]))
     if command == "close-steam.sh":
         users = arguments[1:] if arguments[:1] == ["--force"] else arguments
         return are_normal_users(users)
