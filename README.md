@@ -12,8 +12,8 @@ wrapper that instead uses:
 $XDG_DATA_HOME/steam-shared-library-proton/<appid>
 ```
 
-Each Linux account therefore gets a private prefix while game assets and the
-official Proton installation remain shared. Native Linux games are unaffected.
+Each Linux account therefore gets a private prefix while game assets remain shared. Official Proton and Steam Linux Runtime
+are installed separately in each account’s local Steam library. Native Linux games are unaffected.
 Steam displays the wrapper as **Shared library – personal settings (Proton)**.
 
 ![Steam Shared Library Manager showing the six-step setup journey](media/sslm.jpg)
@@ -62,25 +62,27 @@ The manager guides you through six steps:
 2. Prepare a missing/empty folder, or inspect and repair an existing Steam
    library.
 3. Log out and back in so new group membership reaches the desktop session.
-4. Add the folder to one Steam account and install an official Proton there.
-5. Close Steam, install the personal-settings wrapper, and optionally register
-   the shared folder as each person's default Steam storage.
+4. Install an official Proton in each person’s local Steam library.
+5. Close Steam, install the personal-settings wrapper, register the shared
+   game folder, and keep each local library as the default for tools.
 6. Finish the remaining account-specific Steam setting and check game status.
 
-The status check also detects an official Proton update whose SteamPipe
-permission restore is still pending. Step 4 turns red and offers an idle-only,
-administrator repair. This condition can recur whenever shared Proton is
-updated by a different Linux user.
+The manager makes each person's primary local library the default, so automatic
+Proton and Steam Linux Runtime downloads use local storage. When installing a
+game, choose the shared folder (for example `/srv/SteamLibrary`) in **Install To**.
+Steam has a single install default, so this also means new games initially offer
+local storage. Keep local storage as default even after installing a shared game.
 
-Step 4 includes an illustrated, previous/next Steam guide showing where to add
-the shared storage folder, find an official Proton under **Library → Tools**,
-and—after Step 5—select the personal-settings tool under
-**Settings → Compatibility**.
+Step 4 detects misplaced Proton and runtime installations, including new versions
+by their names. For an existing setup, install those tools locally for each person
+and remove the shared copies through Steam before continuing. The manager does
+not silently move or delete existing installations. Each person still selects the
+wrapper under **Settings → Compatibility**. The wrapper always uses that person's
+local Proton and its matching runtime dependency.
 
-For a new library, `/srv/SteamLibrary` is a sensible default. Step 5 registers
-it and makes it the default storage for each selected person unless that
-default-on option is unchecked. Each person still selects the wrapper under
-**Settings → Compatibility**.
+These defaults do not prevent someone explicitly selecting shared storage for a
+tool or later changing Steam's default. Refresh status to detect misplaced tools
+or an incorrect default; rerun setup to restore the local default.
 
 Selections survive the required logout/login in:
 
@@ -118,18 +120,14 @@ configuration. The automatic storage writer stops instead of overwriting a
 file changed after its preflight.
 
 Personal prefix directories are forced to mode `700` during installation and
-whenever the wrapper starts. Shared game files and the shared Proton
-installation are writable by the selected access group, so group members must
+whenever the wrapper starts. Shared game files are writable by the selected
+access group, so group members must
 be trusted: any member able to update shared games can also alter executables
 another member may later run.
 
 The wrapper tolerates Steam runtimes that omit AppID environment variables and
 start outside the game directory by matching an absolute launch argument below
-`steamapps/common/<installdir>` to `appmanifest_*.acf`. For shared official
-Proton updates, the manager compares `str(os.path.getmtime())` for
-`steampipe_fixups.json` with `files/steampipe_fixups_mtime`. Its privileged
-repair implements the recorded mode restoration in trusted manager code rather
-than executing a group-writable Proton script as root.
+`steamapps/common/<installdir>` to `appmanifest_*.acf`.
 
 ## Command line
 
@@ -140,10 +138,10 @@ The same operations are available without the GUI. For example:
 sudo ./commands/setup-shared-library.sh \
   --library /srv/SteamLibrary --group steamgames user1 user2
 
-# Add people, install the wrapper, and make the shared folder their default.
+# Install Proton locally for each user first, then configure shared games.
 sudo ./commands/add-user.sh --close-steam \
   --default-library /srv/SteamLibrary --group steamgames \
-  --base-proton '/srv/SteamLibrary/steamapps/common/Proton - Experimental' \
+  --base-proton '/home/user1/.local/share/Steam/steamapps/common/Proton - Experimental' \
   user1 user2
 
 # Preview, then migrate explicit per-game Proton selections.
@@ -157,7 +155,7 @@ Run any script with `--help` and see
 ## Update or remove
 
 Close Steam and rerun `install.sh` to update the wrapper or select a different
-shared official Proton.
+preferred local official Proton.
 
 To remove only this project's Steam registration:
 

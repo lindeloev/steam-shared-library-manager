@@ -18,14 +18,14 @@ class ProtonWrapperTests(unittest.TestCase):
     def test_app_id_is_found_from_game_executable_argument(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            tool = root / "tool"
-            base_proton = root / "base-proton"
+            tool = root / "Steam/compatibilitytools.d/personal"
+            base_proton = root / "Steam/steamapps/common/Proton - Experimental"
             data_home = root / "data"
             steamapps = root / "Shared Library/steamapps"
             game = steamapps / "common/Example Game/Binaries/Win64/Game.exe"
             runtime_working_directory = root / "runtime"
-            tool.mkdir()
-            base_proton.mkdir()
+            tool.mkdir(parents=True)
+            base_proton.mkdir(parents=True)
             game.parent.mkdir(parents=True)
             runtime_working_directory.mkdir()
             (steamapps / "appmanifest_4242.acf").write_text(
@@ -49,7 +49,7 @@ class ProtonWrapperTests(unittest.TestCase):
                 for key, value in os.environ.items()
                 if key not in {"SteamGameId", "SteamGameID", "SteamAppId", "SteamAppID", "STEAM_APPID"}
             }
-            environment.update({"HOME": str(root / "home"), "XDG_DATA_HOME": str(data_home)})
+            environment.update({"HOME": str(root), "XDG_DATA_HOME": str(data_home)})
             result = subprocess.run(
                 [str(wrapper), "waitforexitandrun", str(game)],
                 cwd=runtime_working_directory,
@@ -65,11 +65,11 @@ class ProtonWrapperTests(unittest.TestCase):
     def test_existing_prefix_permissions_are_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            tool = root / "tool"
-            base_proton = root / "base-proton"
+            tool = root / "Steam/compatibilitytools.d/personal"
+            base_proton = root / "Steam/steamapps/common/Proton - Experimental"
             data_home = root / "data"
-            tool.mkdir()
-            base_proton.mkdir()
+            tool.mkdir(parents=True)
+            base_proton.mkdir(parents=True)
 
             wrapper = tool / "proton"
             shutil.copy2(ROOT / "commands/proton", wrapper)
@@ -90,7 +90,7 @@ class ProtonWrapperTests(unittest.TestCase):
 
             environment = {
                 **os.environ,
-                "HOME": str(root / "home"),
+                "HOME": str(root),
                 "XDG_DATA_HOME": str(data_home),
                 "SteamGameId": "1234",
             }
@@ -106,13 +106,34 @@ class ProtonWrapperTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(prefix_root.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(app_prefix.stat().st_mode), 0o700)
 
+    def test_wrapper_rejects_old_shared_proton_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            tool = home / "Steam/compatibilitytools.d/personal"
+            tool.mkdir(parents=True)
+            shared = root / "shared/Proton - Experimental"
+            shared.mkdir(parents=True)
+            (shared / "proton").write_text("#!/bin/sh\nexit 0\n")
+            (shared / "proton").chmod(0o755)
+            wrapper = tool / "proton"
+            shutil.copy2(ROOT / "commands/proton", wrapper)
+            wrapper.chmod(0o755)
+            (tool / "base-proton.conf").write_text(f"BASE_PROTON={shared}\n")
+            result = subprocess.run([str(wrapper), "run"],
+                                    env={**os.environ, "HOME": str(home), "SteamGameId": "1234"},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("primary library", result.stderr)
+            self.assertFalse((home / ".local/share/steam-shared-library-proton").exists())
+
     def test_relative_data_home_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            tool = root / "tool"
-            base_proton = root / "base-proton"
-            tool.mkdir()
-            base_proton.mkdir()
+            tool = root / "Steam/compatibilitytools.d/personal"
+            base_proton = root / "Steam/steamapps/common/Proton - Experimental"
+            tool.mkdir(parents=True)
+            base_proton.mkdir(parents=True)
             wrapper = tool / "proton"
             shutil.copy2(ROOT / "commands/proton", wrapper)
             wrapper.chmod(0o755)
@@ -129,7 +150,7 @@ class ProtonWrapperTests(unittest.TestCase):
                 cwd=root,
                 env={
                     **os.environ,
-                    "HOME": str(root / "home"),
+                    "HOME": str(root),
                     "XDG_DATA_HOME": "relative-data",
                     "SteamGameId": "1234",
                 },

@@ -97,6 +97,26 @@ require_existing_path_below_home() {
     require_existing_path_below "$1" "$2"
 }
 
+# Resolve the requested Proton version independently for each account. Never
+# delegate to another person's installation or a group-writable shared tool.
+require_local_proton() (
+    local_root=$1
+    requested_name=$(basename -- "$2")
+    local_common=$(require_existing_path_below "$local_root" "$local_root/steamapps/common") || return 1
+    [ "$local_common" = "$local_root/steamapps/common" ] || return 1
+    for candidate in "$local_common/$requested_name" "$local_common/Proton - Experimental" "$local_common"/Proton*; do
+        [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
+        [ -f "$candidate/proton" ] && [ -x "$candidate/proton" ] && [ ! -L "$candidate/proton" ] || continue
+        require_existing_path_below "$local_root" "$candidate/proton" >/dev/null || continue
+        [ -f "$candidate/toolmanifest.vdf" ] || continue
+        require_existing_path_below "$local_root" "$candidate/toolmanifest.vdf" >/dev/null || continue
+        printf '%s\n' "$candidate"
+        return 0
+    done
+    echo "Install an official Proton in this person's local Steam library first: $local_root" >&2
+    return 1
+)
+
 make_prefix_tree_private() {
     private_prefix_root=$(require_existing_path_below_home "$1" "$2") || return 1
     [ -d "$private_prefix_root" ] || return 0

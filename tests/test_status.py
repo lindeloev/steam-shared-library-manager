@@ -153,6 +153,30 @@ class StatusTests(unittest.TestCase):
                 )
             )
 
+    def test_local_default_checks_every_account_and_ignores_nested_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for account in ("123", "456"):
+                config = root / f"userdata/{account}/config/localconfig.vdf"
+                config.parent.mkdir(parents=True)
+                config.write_text('"UserLocalConfigStore" { "nested" { "LastInstallFolderIndex" "9" } "LastInstallFolderIndex" "0" }')
+            # A nested key must not shadow the actual top-level default.
+            self.assertTrue(self.status.local_library_is_default(root))
+            config.write_text('"UserLocalConfigStore" { "LastInstallFolderIndex" "1" }')
+            self.assertFalse(self.status.local_library_is_default(root))
+
+    def test_future_tools_are_flagged_and_excluded_from_games(self) -> None:
+        self.assertFalse(self.status.is_support_tool("999998", "Proton Pulse", "Proton Pulse"))
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary)
+            steamapps = library / "steamapps"
+            (steamapps / "common/SteamLinuxRuntime_future").mkdir(parents=True)
+            (steamapps / "appmanifest_999999.acf").write_text(
+                '"AppState" { "appid" "999999" "name" "Proton 99.0" "installdir" "Proton 99.0" }'
+            )
+            self.assertEqual(self.status.shared_support_tools(library), ["Proton 99.0", "SteamLinuxRuntime_future"])
+            self.assertEqual(self.status.games(library, []), [])
+
     def test_game_readiness_does_not_require_an_existing_prefix(self) -> None:
         user = {
             "library_registered": True,

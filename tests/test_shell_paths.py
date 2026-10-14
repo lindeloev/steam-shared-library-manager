@@ -72,6 +72,30 @@ class ShellPathValidationTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("symbolic links", result.stderr)
 
+    def test_local_proton_selection_rejects_shared_symlink_and_uses_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common = root / "local/steamapps/common"
+            common.mkdir(parents=True)
+            shared = root / "shared/Proton - Experimental"
+            shared.mkdir(parents=True)
+            (shared / "proton").write_text("#!/bin/sh\n")
+            (shared / "proton").chmod(0o755)
+            (shared / "toolmanifest.vdf").write_text('"manifest" {}')
+            (common / shared.name).symlink_to(shared)
+            args = ["/bin/sh", "-c", '. "$1"; require_local_proton "$2" "$3"',
+                    "sh", str(COMMON), str(root / "local"), str(shared)]
+            result = subprocess.run(args, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            fallback = common / "Proton 99.0"
+            fallback.mkdir()
+            (fallback / "proton").write_text("#!/bin/sh\n")
+            (fallback / "proton").chmod(0o755)
+            (fallback / "toolmanifest.vdf").write_text('"manifest" {}')
+            result = subprocess.run(args, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(fallback))
+
     def test_prefix_tree_is_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)

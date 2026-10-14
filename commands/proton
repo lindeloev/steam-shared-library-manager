@@ -87,6 +87,25 @@ case "$HOME" in
         exit 1
         ;;
 esac
+# Old installations may still have a shared BASE_PROTON configuration. Refuse
+# that configuration instead of launching a group-writable compatibility tool.
+resolved_home=$(realpath -e -- "$HOME")
+local_steam_root=$(realpath -e -- "$script_dir/../..")
+resolved_proton=$(realpath -e -- "$BASE_PROTON/proton")
+case "$local_steam_root" in
+    "$resolved_home"/*) ;;
+    *)
+        echo "Steam Shared Library Manager: Proton must be local to this account; rerun manager setup" >&2
+        exit 1
+        ;;
+esac
+case "$resolved_proton" in
+    "$local_steam_root"/steamapps/common/*/proton) ;;
+    *)
+        echo "Steam Shared Library Manager: Proton must be in this account's primary library; rerun manager setup" >&2
+        exit 1
+        ;;
+esac
 case "${XDG_DATA_HOME:-}" in
     "") data_home="$HOME/.local/share" ;;
     /*) data_home=$XDG_DATA_HOME ;;

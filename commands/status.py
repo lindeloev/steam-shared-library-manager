@@ -217,6 +217,59 @@ def steam_localconfigs(steam_root: Path) -> list[Path]:
     ]
 
 
+def local_library_is_default(steam_root: Path) -> bool:
+    configs = steam_localconfigs(steam_root)
+    return bool(configs) and all(
+        local_default_index(read_text(path)) == "0"
+        for path in configs
+    )
+
+
+def local_default_index(text: str) -> str:
+    section = vdf_object(text, "UserLocalConfigStore")
+    position = 0
+    pattern = re.compile(r'"([^"\\]*)"\s*(\{|"(?:\\.|[^"\\])*")')
+    while match := pattern.search(section, position):
+        if match.group(2) == "{":
+            result = vdf_braced_value(section, match.start(2))
+            if result is None:
+                return ""
+            position = result[1] + 1
+        else:
+            if match.group(1) == "LastInstallFolderIndex":
+                return match.group(2)[1:-1]
+            position = match.end()
+    return ""
+
+
+def is_support_tool(appid: str, name: str, install_dir: str) -> bool:
+    """Names cover future Proton/runtime releases without a fixed AppID list."""
+    return appid in TOOL_APP_IDS or any(
+        value.casefold().startswith(("steam linux runtime", "steamlinuxruntime"))
+        or re.match(r"^proton(?:$|[ -]+(?:\d|experimental\b|hotfix\b|next\b|battleye\b|easyanticheat\b))", value, re.IGNORECASE) is not None
+        for value in (name, install_dir)
+    )
+
+
+def shared_support_tools(library: Path) -> list[str]:
+    tools = set()
+    for manifest in (library / "steamapps").glob("appmanifest_*.acf"):
+        text = read_text(manifest)
+        name = vdf_value(text, "name")
+        install_dir = vdf_value(text, "installdir")
+        if is_support_tool(vdf_value(text, "appid"), name, install_dir):
+            tools.add(name or install_dir or manifest.stem)
+    # Also detect leftover/unregistered tool directories.
+    common = library / "steamapps/common"
+    try:
+        tools.update(path.name for path in common.iterdir()
+                     if is_support_tool("", path.name, path.name)
+                     or (path / "toolmanifest.vdf").is_file())
+    except OSError:
+        pass
+    return sorted(tools)
+
+
 def personal_tool_selected(config: Path) -> bool:
     """Report the account-wide tool choice without changing Steam state."""
     return compat_tool_mappings(config).get("0") == TOOL_ID
@@ -323,6 +376,11 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
     resolved_home = home.resolve(strict=False)
     prefix_root = safe_existing_descendant(resolved_home, resolved_home / PREFIX_ROOT)
     mappings = compat_tool_mappings(config) if config is not None else {}
+    local_protons = available_protons(steam_root) if steam_root is not None else []
+    configured_proton = (
+        read_text(tool_dir / "base-proton.conf").removeprefix("BASE_PROTON=").strip()
+        if tool_dir is not None else ""
+    )
     prefixes: list[str] = []
     if prefix_root is not None:
         try:
@@ -344,8 +402,10 @@ def user_status(user: pwd.struct_passwd, library: Path, group_name: str) -> dict
             library_is_default(steam_root, config, library)
             if steam_root is not None and config is not None else False
         ),
+        "local_library_default": local_library_is_default(steam_root) if steam_root is not None else False,
+        "available_protons": local_protons,
         "tool_installed": (
-            (tool_dir / "proton").is_file() and (tool_dir / "base-proton.conf").is_file()
+            (tool_dir / "proton").is_file() and configured_proton in local_protons
             if tool_dir is not None else False
         ),
         "personal_tool_selected": mappings.get("0") == TOOL_ID,
@@ -444,6 +504,8 @@ def game_user_state(user: dict[str, object], appid: str, kind: str) -> str:
 def available_protons(library: Path) -> list[str]:
     """Return official Proton directories already installed in this library."""
     common = library / "steamapps/common"
+    if common.resolve(strict=False) != library.resolve(strict=False) / "steamapps/common":
+        return []
     try:
         choices = [
             item
@@ -454,6 +516,8 @@ def available_protons(library: Path) -> list[str]:
             and not (item / "proton").is_symlink()
             and (item / "proton").is_file()
             and (item / "proton").stat().st_mode & 0o111
+            and (item / "toolmanifest.vdf").is_file()
+            and safe_existing_descendant(library, item / "toolmanifest.vdf") is not None
         ]
     except OSError:
         return []
@@ -490,7 +554,7 @@ def games(library: Path, users: list[dict[str, object]]) -> list[dict[str, objec
     for manifest in sorted(steamapps.glob("appmanifest_*.acf")):
         text = read_text(manifest)
         appid = vdf_value(text, "appid")
-        if not appid.isdigit() or appid in TOOL_APP_IDS:
+        if not appid.isdigit() or is_support_tool(appid, vdf_value(text, "name"), vdf_value(text, "installdir")):
             continue
         name = vdf_value(text, "name") or appid
         install_dir = vdf_value(text, "installdir")
@@ -523,10 +587,11 @@ def main() -> None:
     args = parser.parse_args()
     library = Path(args.library)
     kind = library_kind(library)
-    protons = available_protons(library)
-    proton_fixups = [proton_fixup_status(Path(path)) for path in protons]
+    shared_protons = available_protons(library)
+    proton_fixups = [proton_fixup_status(Path(path)) for path in shared_protons]
     accounts = normal_users()
     users = [user_status(user, library, args.group) for user in accounts]
+    protons = sorted({path for user in users for path in user["available_protons"]})
     access_ready, access_problems = shared_access_report(library, accounts, args.group) if kind == "steam_library" else (False, [])
     libraries = sorted({
         path
@@ -549,6 +614,7 @@ def main() -> None:
         "available_protons": protons,
         "proton_fixups": proton_fixups,
         "proton_fixups_pending": any(item["pending"] for item in proton_fixups),
+        "shared_support_tools": shared_support_tools(library),
         "users": users,
         "registered_libraries": libraries,
         "games": games(library, users) if library.is_dir() else [],

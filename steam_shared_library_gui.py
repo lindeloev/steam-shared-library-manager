@@ -37,7 +37,6 @@ class SharedSteamGui(tk.Tk):
         self.minsize(900, 720)
         self.geometry("1050x800")
         self.library = tk.StringVar(value=self.default_library())
-        self.make_library_default = tk.BooleanVar(value=True)
         self.status: dict[str, object] = {}
         self.user_names: list[str] = []
         self.selected_names: set[str] = set()
@@ -253,7 +252,7 @@ class SharedSteamGui(tk.Tk):
             1: ("👥  Choose people", "Select the Linux accounts that should use this shared library. The current desktop account is selected by default."),
             2: ("📁  Shared game folder", "Prepare the dedicated folder and grant the selected people shared-library access."),
             3: ("↪  Restart session", "Sign out of Ubuntu and back in so the selected current account receives its new shared-library group membership."),
-            4: ("⬇  Add the folder and Proton", "One selected person registers the shared folder with Steam and installs Proton there once."),
+            4: ("⬇  Add the folder and Proton", "Each selected person installs Proton in their own local Steam library. Shared storage is for games."),
             5: ("⚙  Set up selected people", "Install the personal-settings tool for the people chosen in Step 1."),
             6: ("🏁  Finish and check games", "Confirm every selected person's Steam setup, then review installed games and personal setups."),
         }
@@ -326,26 +325,15 @@ class SharedSteamGui(tk.Tk):
             found = self.find_base_proton()
             if found:
                 ttk.Label(content, text="Detected official Proton: " + found, wraplength=590).pack(anchor="w")
-            pending_fixups = [item for item in self.status.get("proton_fixups", []) if item.get("pending")]
-            if pending_fixups:
-                ttk.Label(
-                    content,
-                    text="Shared Proton update needs permission restoration before another Linux user can launch it:\n• "
-                         + "\n• ".join(str(item["path"]) for item in pending_fixups),
-                    foreground="#991b1b",
-                    justify="left",
-                    wraplength=590,
-                ).pack(anchor="w", pady=(10, 4))
-                for item in pending_fixups:
-                    path = str(item["path"])
-                    ttk.Button(
-                        content,
-                        text="Repair pending fixups: " + Path(path).name,
-                        command=lambda selected=path: self.offer_proton_fixup_repair(selected),
-                    ).pack(anchor="w", pady=(4, 0))
+            shared_tools = self.status.get("shared_support_tools", [])
+            if shared_tools:
+                ttk.Label(content, text="Tools found in shared storage: " + ", ".join(shared_tools)
+                          + ". Install these in each person's local library, then remove the shared copies "
+                          "through Steam. Existing games and personal prefixes can stay in place.",
+                          foreground="#991b1b", wraplength=590).pack(anchor="w", pady=(8, 0))
             instructions = (
-                "Proton is Steam's compatibility tool for Windows-only games on Linux. Install it once in the shared folder.\n\n"
-                "1. Choose one person from Step 1. If they were just added to the shared-game group, log out of Ubuntu and back in first.\n\n"
+                "Proton is Steam's compatibility tool for Windows-only games on Linux. Each person installs it in their local library. Keep Proton and Steam Linux Runtime out of shared storage.\n\n"
+                "1. Repeat for each person from Step 1. If they were just added to the shared-game group, log out of Ubuntu and back in first.\n\n"
                 "2. Start the native Steam client and sign in. For a new Steam account, let Steam complete its first-time setup.\n\n"
                 "Use the illustrated Steam guide below. Its final card previews the account-specific setting you will apply after Step 5."
             )
@@ -353,7 +341,7 @@ class SharedSteamGui(tk.Tk):
             self.build_steam_visual_guide(content)
             ttk.Label(
                 content,
-                text="The manager does not continuously check Steam. After installing Proton, return here and refresh; Step 4 turns green when Proton is found.",
+                text="The manager does not continuously check Steam. After installing Proton, return here and refresh; Step 4 turns green when every selected person has local Proton and shared storage contains only games.",
                 foreground="#555555",
                 wraplength=590,
             ).pack(anchor="w", pady=(10, 8))
@@ -390,14 +378,11 @@ class SharedSteamGui(tk.Tk):
                     complete = bool(
                         user.get("in_group")
                         and user.get("tool_installed")
-                        and (
-                            not self.make_library_default.get()
-                            or user.get("library_default")
-                        )
+                        and user.get("local_library_default")
                     )
                     table.insert("", "end", values=(name, "Yes" if user.get("in_group") else "No", steam,
                                                        "Installed" if user.get("tool_installed") else "Not installed",
-                                                       "Shared folder" if user.get("library_default") else "Other"),
+                                                       "Local library" if user.get("local_library_default") else "Other"),
                                  tags=("ready",) if complete else ())
                 table.pack(anchor="w", fill="x", pady=(0, 10))
             elif self.selected_users():
@@ -408,17 +393,10 @@ class SharedSteamGui(tk.Tk):
                 ttk.Label(content, text="Before this step, each of these people must log in to the native Steam client once and let its first-time setup finish: "
                           + ", ".join(not_started) + ". They can then close Steam and return here to refresh status.",
                           foreground="#991b1b", wraplength=590).pack(anchor="w", pady=(0, 10))
-            ttk.Checkbutton(
-                content,
-                text="Register the shared folder and make it the default Steam storage for these people",
-                variable=self.make_library_default,
-                command=self.update_journey,
-            ).pack(anchor="w", pady=(0, 4))
             ttk.Label(
                 content,
-                text="Recommended. This is enabled by default so future game and tool installs use "
-                     + self.library.get()
-                     + ". Steam configuration files are backed up before they are changed.",
+                text="Setup registers shared games and makes local storage the default. Automatic Proton and runtime downloads use local storage. "
+                     "Choose the shared folder when installing games. Steam configuration changes are backed up.",
                 foreground="#555555",
                 wraplength=590,
             ).pack(anchor="w", pady=(0, 10))
@@ -456,16 +434,18 @@ class SharedSteamGui(tk.Tk):
                 for name in self.selected_users():
                     user = report.get(name, {})
                     storage = "Added" if user.get("library_registered") else "Not added"
-                    default = "Shared folder" if user.get("library_default") else "Other"
+                    default = "Local library" if user.get("local_library_default") else "Other"
                     wrapper = "Selected" if user.get("personal_tool_selected") else "Not selected"
                     if not user.get("steam_initialized"):
                         next_action = "Start native Steam once"
+                    elif self.status.get("shared_support_tools"):
+                        next_action = "Move shared tools locally"
                     elif not user.get("tool_installed"):
                         next_action = "Complete Step 5"
                     elif not user.get("library_registered"):
                         next_action = "Add shared folder"
-                    elif self.make_library_default.get() and not user.get("library_default"):
-                        next_action = "Make shared folder default"
+                    elif not user.get("local_library_default"):
+                        next_action = "Make local library default"
                     elif not user.get("personal_tool_selected"):
                         next_action = "Select wrapper in Steam"
                     else:
@@ -495,7 +475,7 @@ class SharedSteamGui(tk.Tk):
                 "1. Add the shared storage folder",
                 "Open Steam → Settings → Storage, choose Add Drive, and select:\n"
                 + self.library.get()
-                + "\n\nIf Steam does not ask where to install Proton, open this folder's ••• menu and make it the default temporarily.",
+                + "\n\nKeep the home-folder library as default. Select the shared folder only when installing games.",
                 HERE / "media/gui/steam_storage.png",
             ),
             (
@@ -504,11 +484,10 @@ class SharedSteamGui(tk.Tk):
                 HERE / "media/gui/steam_tools.png",
             ),
             (
-                "3. Install Proton in the shared folder",
-                "Choose Install, select "
-                + self.library.get()
-                + " under Install To, then choose Install in the confirmation window. Do not select the home-folder library.",
-                HERE / "media/gui/steam_proton_install.png",
+                "3. Install Proton in the local library",
+                "Choose Install and select this person’s home-folder Steam library under Install To. "
+                "Keep this local library as default for automatic Proton and Steam Linux Runtime downloads.",
+                None,
             ),
             (
                 "4. Later, select the personal-settings tool",
@@ -535,6 +514,9 @@ class SharedSteamGui(tk.Tk):
 
         photos: list[tk.PhotoImage | None] = []
         for _slide_title, _slide_text, image_path in slides:
+            if image_path is None:
+                photos.append(None)
+                continue
             try:
                 photos.append(tk.PhotoImage(file=str(image_path)))
             except tk.TclError:
@@ -828,8 +810,8 @@ class SharedSteamGui(tk.Tk):
             self.log_message("EXIT 0", "success")
             self.populate_status()
             self.status_checked = True
-            if self.status.get("proton_fixups_pending"):
-                self.status_label.configure(text="Action needed: shared Proton permission restore pending", foreground="#991b1b")
+            if self.status.get("shared_support_tools"):
+                self.status_label.configure(text="Action needed: move Proton/runtimes out of shared storage", foreground="#991b1b")
             else:
                 self.status_label.configure(text="Full status checked: " + datetime.now().strftime("%H:%M:%S"), foreground="#166534")
             self.update_journey()
@@ -935,13 +917,11 @@ class SharedSteamGui(tk.Tk):
         self.user_names = [str(user["name"]) for user in users]
         self.selected_names.intersection_update(self.user_names)
         self.update_steam_client_warning()
-        pending = [Path(str(item["path"])).name for item in self.status.get("proton_fixups", []) if item.get("pending")]
-        if pending:
-            self.proton_fixup_warning.configure(
-                text="Shared Proton permission restore pending: " + ", ".join(pending) + ". Open Step 4 to repair before launching games."
-            )
-        else:
-            self.proton_fixup_warning.configure(text="")
+        shared_tools = self.status.get("shared_support_tools", [])
+        self.proton_fixup_warning.configure(
+            text=("Tools must be local: " + ", ".join(shared_tools) + ". Open Step 4 to move them out of shared storage.")
+            if shared_tools else ""
+        )
         self.update_journey()
 
     def update_steam_client_warning(self) -> None:
@@ -1020,13 +1000,9 @@ class SharedSteamGui(tk.Tk):
         ttk.Label(frame, text="✓  Finish setup in each person's Steam account", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
         ttk.Label(frame, text="Do these remaining Steam-account steps separately for each selected person. The earlier group access and wrapper installation are already complete.", wraplength=650).pack(anchor="w", pady=(4, 12))
         storage_instruction = (
-            "2. Step 5 normally registers the shared folder and makes it the default automatically. "
-            "If this person's status still says Not added or Other, open Steam → Settings → Storage, "
-            "use + / Add Drive to choose the folder from Step 2, then use its ••• menu → Make Default.\n\n"
-            if self.make_library_default.get()
-            else
-            "2. Open Steam → Settings → Storage. Use + / Add Drive to choose the shared game folder "
-            "shown in Step 2, then use its ••• menu → Make Default if desired.\n\n"
+            "2. Step 5 registers the shared game folder and keeps the local library as default. "
+            "In Steam → Settings → Storage, keep the home-folder library as default. "
+            "Choose the shared folder when installing games. Proton and runtimes belong in local storage.\n\n"
         )
         instructions = (
             "1. Start the native Steam client and sign in as that person.\n\n"
@@ -1047,7 +1023,7 @@ class SharedSteamGui(tk.Tk):
                 completed = (
                     user["library_registered"]
                     and user["personal_tool_selected"]
-                    and (not self.make_library_default.get() or user.get("library_default"))
+                    and (user.get("local_library_default"))
                 )
                 progress.append(str(user["name"]) + (": completed" if completed else ": still needs Steam steps"))
             status = "Current progress: " + "; ".join(progress)
@@ -1100,23 +1076,23 @@ class SharedSteamGui(tk.Tk):
 
         self.set_card(3, "#dcfce7" if session_ready else "#e5e7eb")
 
-        if self.status.get("proton_fixups_pending"):
+        if self.status.get("shared_support_tools"):
             self.set_card(4, "#fee2e2")
-        elif self.status.get("base_proton_ready"):
+        elif self.find_base_proton():
             self.set_card(4, "#dcfce7")
         else:
             self.set_card(4, "#e5e7eb")
 
         if 5 in self.failed_steps:
             self.set_card(5, "#fee2e2")
-        elif not selected or not self.status.get("base_proton_ready") or self.status.get("proton_fixups_pending"):
+        elif not selected or not self.find_base_proton() or self.status.get("shared_support_tools"):
             self.set_card(5, "#e5e7eb")
         elif users and any(not user["steam_initialized"] for user in users):
             self.set_card(5, "#fee2e2")
-        elif not self.status.get("proton_fixups_pending") and users and all(
+        elif not self.status.get("shared_support_tools") and users and all(
             user["in_group"]
             and user["tool_installed"]
-            and (not self.make_library_default.get() or user.get("library_default"))
+            and (user.get("local_library_default"))
             for user in users
         ):
             self.set_card(5, "#dcfce7")
@@ -1125,13 +1101,13 @@ class SharedSteamGui(tk.Tk):
 
         if not selected:
             self.set_card(6, "#e5e7eb")
-        elif self.status.get("proton_fixups_pending"):
+        elif self.status.get("shared_support_tools"):
             self.set_card(6, "#fee2e2")
         elif users and all(
             user["library_registered"]
             and user["tool_installed"]
             and user["personal_tool_selected"]
-            and (not self.make_library_default.get() or user.get("library_default"))
+            and (user.get("local_library_default"))
             for user in users
         ):
             self.set_card(6, "#dcfce7")
@@ -1154,17 +1130,18 @@ class SharedSteamGui(tk.Tk):
         if not users:
             messagebox.showwarning("Select users", "Select one or more people in Step 1 first.", parent=parent or self)
             return
-        proton = self.find_base_proton()
+        if self.status.get("shared_support_tools"):
+            messagebox.showwarning("Move shared tools first", "Install Proton and runtimes in each person's local library and remove their shared copies through Steam. See Step 4.", parent=parent or self)
+            return
+        proton = self.find_base_proton(users)
         if proton is None:
-            messagebox.showwarning("Complete Step 4 first", "Steam has not found an official Proton tool in this shared folder yet. Open Step 4 for the exact folder and installation steps.", parent=parent or self)
+            messagebox.showwarning("Complete Step 4 first", "Each selected person needs an official Proton in their local library. Open Step 4 for installation steps.", parent=parent or self)
             return
         text = "Set up shared-library access and personal Windows-game settings for: " + ", ".join(users) + "?\n\nThe tool checks whether Steam is running and asks it to close before making changes."
-        if self.make_library_default.get():
-            text += "\n\nThe shared folder will also be registered and made their default Steam storage. Changed Steam configuration files are backed up first."
+        text += "\n\nThe shared folder will be registered for games, and each local library made default for tools. Changed Steam configuration files are backed up first."
         if messagebox.askyesno("Configure users", text, parent=parent or self):
             arguments = ["--close-steam"]
-            if self.make_library_default.get():
-                arguments.extend(["--default-library", self.library.get()])
+            arguments.extend(["--default-library", self.library.get()])
             arguments.extend(["--group", GROUP, "--base-proton", proton, *users])
             self.run_admin(
                 "add-user.sh",
@@ -1175,25 +1152,13 @@ class SharedSteamGui(tk.Tk):
                 self.refresh_status,
             )
 
-    def find_base_proton(self) -> str | None:
-        """Prefer Experimental, but work with any official Proton already shared."""
-        candidates = [Path(path) for path in self.status.get("available_protons", [])]
-        if not candidates:
-            common = Path(self.library.get()) / "steamapps/common"
-            try:
-                candidates = [
-                    item
-                    for item in common.iterdir()
-                    if not item.is_symlink()
-                    and item.is_dir()
-                    and item.name.startswith("Proton")
-                    and not (item / "proton").is_symlink()
-                    and (item / "proton").is_file()
-                    and (item / "proton").stat().st_mode & 0o111
-                ]
-            except OSError:
-                candidates = []
-        candidates.sort(key=lambda item: (item.name != "Proton - Experimental", item.name))
+    def find_base_proton(self, users: list[str] | None = None) -> str | None:
+        """Require a local official Proton for every selected person."""
+        report = {str(user["name"]): user for user in self.status.get("users", [])}
+        selected = self.selected_users() if users is None else users
+        if not selected or any(not report.get(name, {}).get("available_protons") for name in selected):
+            return None
+        candidates = report[selected[0]]["available_protons"]
         return str(candidates[0]) if candidates else None
 
     def close_steam(self, parent: tk.Misc | None = None) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Register a shared Steam library and make it the per-account default."""
+"""Register shared game storage while keeping automatic tool installs local."""
 
 from __future__ import annotations
 
@@ -244,7 +244,7 @@ def atomic_update(
 
 
 def prepare_user(
-    user_name: str, library: Path
+    user_name: str, library: Path | None
 ) -> tuple[
     pwd.struct_passwd,
     Path,
@@ -269,11 +269,22 @@ def prepare_user(
 
     folders_path = safe_file(steam_root, steam_root / "config/libraryfolders.vdf")
     original_folders = read_regular_text(folders_path)
-    folders_text, index = ensure_library_registered(
-        original_folders,
-        str(library),
-        secrets.randbelow(9_000_000_000_000_000_000) + 1,
-    )
+    if library is None:
+        folders_text, index = original_folders, 0
+    else:
+        folders_text, index = ensure_library_registered(
+            original_folders,
+            str(library),
+            secrets.randbelow(9_000_000_000_000_000_000) + 1,
+        )
+    # Steam has one default for games and tools. Never select the shared folder:
+    # automatic Proton/runtime downloads must use this account's primary library.
+    primary_paths = [
+        path for path, folder_index in library_indexes(folders_text).items()
+        if folder_index == 0 and Path(path).resolve(strict=True) == steam_root
+    ]
+    if not primary_paths:
+        raise ValueError("Steam's primary library (index 0) does not match its local root")
     localconfigs = sorted((steam_root / "userdata").glob("[0-9]*/config/localconfig.vdf"))
     if not localconfigs:
         raise ValueError(f"{user_name} has no initialized Steam account configuration")
@@ -282,7 +293,7 @@ def prepare_user(
     for localconfig in safe_localconfigs:
         original = read_regular_text(localconfig)
         localconfig_updates.append(
-            (localconfig, original, set_default_folder_index(original, index))
+            (localconfig, original, set_default_folder_index(original, 0))
         )
     return user, folders_path, original_folders, folders_text, index, localconfig_updates
 
@@ -305,25 +316,35 @@ def apply_user(
         print(f"{user_name}: registered shared storage; backup: {backup}")
     else:
         atomic_update(folders_path, original_folders, folders_text, user)
-        print(f"{user_name}: shared storage already registered")
+        print(f"{user_name}: library registration unchanged")
     for localconfig, original, updated in localconfig_updates:
         backup = atomic_update(localconfig, original, updated, user)
         account_id = localconfig.parents[1].name
         if backup is not None:
-            print(f"{user_name}: made shared storage default for Steam account {account_id}; backup: {backup}")
+            print(f"{user_name}: made local storage default for Steam account {account_id}; backup: {backup}")
         else:
-            print(f"{user_name}: shared storage already default for Steam account {account_id}")
+            print(f"{user_name}: local storage already default for Steam account {account_id}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Register a shared Steam library and make it the default for Linux users."
+        description="Register shared game storage and keep local storage default for Proton and runtimes."
     )
-    parser.add_argument("--library", required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--library", help="Shared game library to register")
+    selection.add_argument("--local-only", action="store_true", help="Keep local storage default without registering a library")
     parser.add_argument("users", nargs="+")
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Run this script with sudo or pkexec.")
+    if args.local_only:
+        try:
+            plans = [prepare_user(name, None) for name in args.users]
+            for plan in plans:
+                apply_user(plan)
+        except (KeyError, OSError, UnicodeError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        return
     requested_library = Path(args.library)
     if (
         not requested_library.is_absolute()

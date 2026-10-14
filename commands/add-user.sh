@@ -3,6 +3,9 @@
 set -eu
 usage() { cat <<'EOF'
 Usage: add-user.sh [--close-steam] [--default-library PATH] --group GROUP --base-proton PATH USER [USER ...]
+
+--default-library registers shared game storage; local storage stays default
+for Proton and runtimes. Every USER needs an official Proton installed locally.
 EOF
 }
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
@@ -33,6 +36,7 @@ if ! getent group "$group_name" >/dev/null; then echo "Shared-library group does
 for user_name in "$@"; do
     home_dir=$(user_home "$user_name")
     steam_root=$(require_safe_steam_root "$user_name") || exit 1
+    require_local_proton "$steam_root" "$base_proton" >/dev/null || exit 1
     if [ -L "$steam_root/compatibilitytools.d" ]; then
         echo "Refusing symlinked compatibilitytools.d for $user_name." >&2
         exit 1

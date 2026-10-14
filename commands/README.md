@@ -21,10 +21,11 @@ root-owned cache files behind.
   group-writable Proton directory as root.
 - `grant-library-users.sh` adds existing Linux accounts to the access group.
 - `add-user.sh` combines a clean Steam shutdown, group access, tool install,
-  and optional default-storage configuration.
-- `configure-steam-storage.py` registers the shared folder and selects its
-  folder index as the default for each initialized Steam account. It is invoked
-  by `add-user.sh` when `--default-library` is used.
+  and optional shared-folder registration. Local storage is always made default.
+- `configure-steam-storage.py` registers the shared game folder and selects the primary local
+  library (index 0) as the default for each initialized Steam account. It is invoked
+  by `add-user.sh` when `--default-library` is used. `install.sh` also uses
+  `--local-only` to restore the local default without registering another library.
 - `close-steam.sh` asks selected users' native Steam clients to exit; `--force`
   is an explicit SIGTERM fallback when desktop IPC is unavailable or ignored.
 - `install.sh` installs or updates the compatibility wrapper for selected users.
@@ -36,8 +37,9 @@ root-owned cache files behind.
 
 - `status.py` produces the read-only JSON report used by the GUI.
 - `proton` is copied into each user's Steam configuration. At game launch it
-  selects that user's private prefix and delegates to the shared official
-  Proton installation. If Steam omits the AppID and changes working directory,
+  selects that user's private prefix and delegates to that person’s local official
+  Proton installation. Installation requires local Proton for every selected user
+  and copies its tool manifest to preserve the matching runtime dependency. If Steam omits the AppID and changes working directory,
   it resolves the game executable argument through the library's app manifests.
 - `gui-admin-session.py` accepts only its fixed command allow-list. It is kept
   alive for one open manager window so PolicyKit authorization is not repeated.

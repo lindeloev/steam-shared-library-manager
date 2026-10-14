@@ -7,6 +7,8 @@ import os
 import pwd
 import tempfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -84,6 +86,30 @@ class StorageConfigTests(unittest.TestCase):
         replaced = self.storage.set_default_folder_index(inserted, 4)
         self.assertIn('\t"LastInstallFolderIndex"\t\t"4"', replaced)
         self.assertNotIn('\t"LastInstallFolderIndex"\t\t"2"', replaced)
+
+    def test_preflight_registers_shared_games_but_resets_default_to_local(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            steam_root = home / "Steam"
+            (home / ".steam").mkdir()
+            (home / ".steam/root").symlink_to(steam_root)
+            (steam_root / "config").mkdir(parents=True)
+            (steam_root / "config/libraryfolders.vdf").write_text(
+                f'"libraryfolders" {{ "0" {{ "path" "{steam_root}" }} }}'
+            )
+            config = steam_root / "userdata/123/config/localconfig.vdf"
+            config.parent.mkdir(parents=True)
+            config.write_text('"UserLocalConfigStore" { "LastInstallFolderIndex" "7" }')
+            user = SimpleNamespace(pw_dir=str(home))
+            with mock.patch.object(self.storage.pwd, "getpwnam", return_value=user), \
+                 mock.patch.object(self.storage.subprocess, "run", return_value=SimpleNamespace(returncode=1)):
+                plan = self.storage.prepare_user("person", Path("/srv/SteamLibrary"))
+                local_only = self.storage.prepare_user("person", None)
+            self.assertIn("/srv/SteamLibrary", plan[3])
+            self.assertIn('"LastInstallFolderIndex" "0"', plan[5][0][2])
+            self.assertEqual(local_only[2], local_only[3])
+            self.assertIn('"LastInstallFolderIndex" "0"', local_only[5][0][2])
+            self.assertIn('"7"', config.read_text())  # Preflight never writes.
 
     def test_atomic_update_backs_up_only_when_content_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

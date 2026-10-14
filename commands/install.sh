@@ -4,8 +4,10 @@ set -eu
 usage() { cat <<'EOF'
 Usage: install.sh --base-proton PATH USER [USER ...]
 
-PATH is the directory containing Proton's executable `proton` file. Each USER
-must have run Steam at least once. Steam must be fully closed while this runs.
+PATH selects a preferred Proton version. Each USER must have an official
+Proton installed in their own primary Steam library. The installer selects
+that user's local copy, falling back to another local official version.
+Steam must be fully closed while this runs.
 EOF
 }
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then usage; exit 0; fi
@@ -48,6 +50,7 @@ trap 'exit 1' HUP INT TERM
 for user_name in "$@"; do
     home_dir=$(user_home "$user_name")
     steam_root=$(require_safe_steam_root "$user_name") || exit 1
+    require_local_proton "$steam_root" "$base_proton" >/dev/null || exit 1
     if pgrep -u "$user_name" -x steam >/dev/null 2>&1; then echo "Steam is still running for $user_name. Close it first." >&2; exit 1; fi
     if [ -L "$steam_root/compatibilitytools.d" ]; then echo "Refusing symlinked compatibilitytools.d for $user_name." >&2; exit 1; fi
     config="$steam_root/config/config.vdf"
@@ -61,12 +64,16 @@ for user_name in "$@"; do
     done
 done
 
+# This safety default applies even when shared-folder registration is omitted.
+"$script_dir/configure-steam-storage.py" --local-only "$@"
+
 # Install the small compatibility tool into each user's own Steam directory.
 for user_name in "$@"; do
     active_user=$user_name
     echo "$user_name: installing personal-settings tool"
     home_dir=$(user_home "$user_name")
     steam_root=$(require_safe_steam_root "$user_name") || exit 1
+    user_proton=$(require_local_proton "$steam_root" "$base_proton") || exit 1
     tool_dir="$steam_root/compatibilitytools.d/steam-shared-library-proton"
     legacy_tool_dir="$steam_root/compatibilitytools.d/steam-per-user-proton"
     if [ -L "$tool_dir" ]; then echo "Refusing symlinked tool directory for $user_name." >&2; exit 1; fi
@@ -76,9 +83,12 @@ for user_name in "$@"; do
     if [ -e "$old_tool_file" ] && grep -q '"steam-per-user-proton"' "$old_tool_file"; then rm -f "$old_tool_file"; fi
     rm -f "$tool_dir/compatibilitytool.vdf" "$tool_dir/toolmanifest.vdf" "$tool_dir/proton" "$tool_dir/base-proton.conf"
     install -o "$user_name" -g "$(id -gn "$user_name")" -m 0644 "$project_dir/steam-shared-library-proton.vdf" "$tool_dir/compatibilitytool.vdf"
-    install -o "$user_name" -g "$(id -gn "$user_name")" -m 0644 "$project_dir/toolmanifest.vdf" "$tool_dir/toolmanifest.vdf"
+    # Keep the runtime dependency in sync with this person's Proton version.
+    # The command still points at /proton, which is our personal-prefix wrapper.
+    user_manifest=$(require_existing_path_below "$steam_root" "$user_proton/toolmanifest.vdf") || exit 1
+    install -o "$user_name" -g "$(id -gn "$user_name")" -m 0644 "$user_manifest" "$tool_dir/toolmanifest.vdf"
     install -o "$user_name" -g "$(id -gn "$user_name")" -m 0755 "$script_dir/proton" "$tool_dir/proton"
-    printf 'BASE_PROTON=%s\n' "$base_proton" > "$tool_dir/base-proton.conf"
+    printf 'BASE_PROTON=%s\n' "$user_proton" > "$tool_dir/base-proton.conf"
     chown "$user_name:$(id -gn "$user_name")" "$tool_dir/base-proton.conf"
     chmod 0644 "$tool_dir/base-proton.conf"
 
