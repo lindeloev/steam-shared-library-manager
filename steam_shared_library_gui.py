@@ -179,7 +179,7 @@ class SharedSteamGui(tk.Tk):
         self.show_step(step)
 
     def build_window(self) -> None:
-        header = ttk.Frame(self, padding=12)
+        header = ttk.Frame(self, padding=(12, 12, 12, 6))
         header.pack(fill="x")
         ttk.Label(header, text="🎮  Steam Shared Library Manager", font=("TkDefaultFont", 16, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(header, text="One shared game installation; personal Windows-game settings for each person.").grid(row=1, column=0, sticky="w", pady=(2, 8))
@@ -195,11 +195,13 @@ class SharedSteamGui(tk.Tk):
         self.activity.grid_remove()
         self.steam_client_warning = ttk.Label(header, foreground="#991b1b", wraplength=780)
         self.steam_client_warning.grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.steam_client_warning.grid_remove()
         self.proton_fixup_warning = ttk.Label(header, foreground="#991b1b", wraplength=780)
         self.proton_fixup_warning.grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.proton_fixup_warning.grid_remove()
         header.columnconfigure(1, weight=1)
 
-        self.setup_tab = ttk.Frame(self, padding=12)
+        self.setup_tab = ttk.Frame(self, padding=(12, 4, 12, 12))
         self.setup_tab.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self.build_setup_tab()
 
@@ -1013,6 +1015,10 @@ class SharedSteamGui(tk.Tk):
             text=("Tools must be local: " + ", ".join(shared_tools) + ". Open Step 4 to move them out of shared storage.")
             if shared_tools else ""
         )
+        if shared_tools:
+            self.proton_fixup_warning.grid()
+        else:
+            self.proton_fixup_warning.grid_remove()
         self.update_journey()
 
     def update_steam_client_warning(self) -> None:
@@ -1037,6 +1043,10 @@ class SharedSteamGui(tk.Tk):
                 + ". Launch /usr/games/steam for this shared library; do not use the Snap or Flatpak client.")
         else:
             self.steam_client_warning.configure(text="")
+        if unsupported or mixed:
+            self.steam_client_warning.grid()
+        else:
+            self.steam_client_warning.grid_remove()
 
     def show_games(self) -> None:
         window = tk.Toplevel(self)
